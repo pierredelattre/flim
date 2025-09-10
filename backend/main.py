@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from allocineAPI.allocineAPI import allocineAPI
+from allocine_wrapper import get_movies_with_showtimes
+
 
 app = FastAPI()
 
@@ -17,7 +19,7 @@ app.add_middleware(
 def scrape(departement_id: str = Form(...)):
     api = allocineAPI()
     try:
-        data = api.get_movies(departement_id, "2025-09-10")
+        data = get_movies_with_showtimes(departement_id, "2025-09-10")
         return {"success": True, "data": data}
     except Exception as e:
         return {"success": False, "error": str(e)}

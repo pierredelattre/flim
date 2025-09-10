@@ -31,15 +31,19 @@ async function scrape() {
   <div>
     <h1>movies around me</h1>
     <input v-model="departement" placeholder="Département" />
-    <button @click="scrape">Scraper</button>
+    <button @click="scrape">scrap</button>
 
-    <h2>Films</h2>
+    <h2>résultats</h2>
     <div id="results" v-if="results.length">
       <div class="result__movie" v-for="(res, index) in results" :key="index">
         <img :src="res.urlPoster" :alt="res.title">
         <p>{{ res.title }}</p>
         <p>{{ res.director }}</p>
         <p>{{ res.runtime }}</p>
+        <div class="showtime" v-for="(showtime, index) in res.showtimes" :key="index">
+          <p>{{ showtime.startsAt }}</p>
+          <p>{{ showtime.diffusionVersion }}</p>
+        </div>
       </div>
     </div>
   </div>

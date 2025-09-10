@@ -1,14 +1,30 @@
-body {
+* {
   padding: 0;
   margin: 0;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 1rem;
 }
 
 #results {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  grid-gap: 1rem;
   width: 100%;
 }
 
-.result__movie, .result__movie > * {
-  width: 100%
+#results img {
+  width: 100%;
+  height: auto;
 }
+
+.showtime {
+  background-color: #f5f5f5;
+  padding: .5rem;
+  margin: 1rem 0
+}
+
