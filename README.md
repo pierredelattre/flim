@@ -1,4 +1,7 @@
 # flim
+## Lancer front & back en même temps
+make dev
+
 ## Lancer le back-end
 uvicorn main:app --reload
 

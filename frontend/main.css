@@ -7,13 +7,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin: 1rem;
+  margin: 2rem 20rem;
 }
 
 #results {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  grid-gap: 1rem;
+  grid-gap: 2rem;
   width: 100%;
 }
 

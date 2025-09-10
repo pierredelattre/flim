@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from allocineAPI.allocineAPI import allocineAPI
 from allocine_wrapper import get_movies_with_showtimes
 
-
 app = FastAPI()
 
 # Autoriser le frontend Vue (en dev sur :5173)

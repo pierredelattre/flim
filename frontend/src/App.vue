@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from "vue"
 
-const departement = ref("P0571")
+const departement = ref("P0086")
 
 const results = ref([])
 
@@ -29,7 +29,7 @@ async function scrape() {
 
 <template>
   <div>
-    <h1>movies around me</h1>
+    <h1>Flim</h1>
     <input v-model="departement" placeholder="Département" />
     <button @click="scrape">scrap</button>
 
@@ -40,9 +40,17 @@ async function scrape() {
         <p>{{ res.title }}</p>
         <p>{{ res.director }}</p>
         <p>{{ res.runtime }}</p>
-        <div class="showtime" v-for="(showtime, index) in res.showtimes" :key="index">
+        <!-- <div class="showtime" v-for="(showtime, index) in res.showtimes" :key="index">
           <p>{{ showtime.startsAt }}</p>
           <p>{{ showtime.diffusionVersion }}</p>
+          <a :href="showtime.reservation_url">Réserver séance</a>
+        </div> -->
+
+        <!-- v-if si startsAt déjà passé ou pas, si oui ne pas afficher -->
+        <div class="showtime">
+          <p>{{ res.showtimes[0].startsAt }}</p>
+          <p>{{ res.showtimes[0].diffusionVersion }}</p>
+          <a :href="res.showtimes[0].reservation_url">Réserver séance</a>
         </div>
       </div>
     </div>
