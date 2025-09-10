@@ -1,3 +1,10 @@
+# Charger variables BDD
+from dotenv import load_dotenv
+import os
+load_dotenv()  # charge .env
+print("DB URL:", os.getenv("DATABASE_URL"))
+print("Allociné Key:", os.getenv("API_KEY_ALLOCINE"))
+
 from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from allocineAPI.allocineAPI import allocineAPI
@@ -12,11 +19,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
+) 
 
 @app.post("/scrape")
 def scrape(departement_id: str = Form(...)):
-    api = allocineAPI()
+    api = allocineAPI() 
     try:
         data = get_movies_with_showtimes(departement_id, "2025-09-10")
         return {"success": True, "data": data}
