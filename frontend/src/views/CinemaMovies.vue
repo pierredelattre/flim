@@ -19,6 +19,7 @@ async function scrape() {
     })
   })
   const data = await res.json()
+  console.log("Réponse backend:", data)
   if (data.success) {
     results.value = data.data
   } else {

@@ -1,5 +1,6 @@
 # Charger variables BDD
 from dotenv import load_dotenv
+from datetime import datetime
 import os
 load_dotenv()  # charge .env
 print("DB URL:", os.getenv("DATABASE_URL"))
@@ -25,7 +26,8 @@ app.add_middleware(
 def scrape(departement_id: str = Form(...)):
     api = allocineAPI() 
     try:
-        data = get_movies_with_showtimes(departement_id, "2025-09-10")
+        data = get_movies_with_showtimes(departement_id, datetime.today().strftime('%Y-%m-%d'))
+        print("Résultats trouvés:", data)
         return {"success": True, "data": data}
     except Exception as e:
         return {"success": False, "error": str(e)}
