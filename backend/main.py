@@ -42,7 +42,7 @@ def scrape(departement_id: str = Form(...)):
 class LocationRequest(BaseModel):
   lat: float
   lon: float
-  radius_km: float = 5
+  radius_km: float = 20
 
 def haversine(lat1, lon1, lat2, lon2):
   # Retourne la distance en km entre 2 points
