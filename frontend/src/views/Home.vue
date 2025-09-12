@@ -29,7 +29,7 @@ const fetchNearbyMovies = async () => {
       body: JSON.stringify({
         lat: position.value.lat,
         lon: position.value.lng,
-        radius_km: 5,
+        radius_km: 20,
       }),
     });
 
@@ -61,13 +61,12 @@ const fetchNearbyMovies = async () => {
             <strong>{{ cinema.name }}</strong>
             ({{ cinema.distance_km ? cinema.distance_km.toFixed(2) : "?" }} km)
             <p>{{ cinema.address }}</p>
-
+ 
             <ul>
-              <li v-for="show in cinema.showtimes" :key="show.startsAt">
-                {{ show.startsAt }} ({{ show.diffusionVersion }})
-                <a :href="show.reservation_url" target="_blank">Réserver</a>
+              <li v-for="(show, index) in (cinema.showtimes || [])" :key="index">
+                {{ show.start_date }} {{ show.start_time }} ({{ show.diffusion_version || "" }})
+                <a v-if="show.reservation_url" :href="show.reservation_url" target="_blank">Réserver</a>
               </li>
-                    <br>
             </ul>
           </li>
         </ul>

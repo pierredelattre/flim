@@ -3,7 +3,6 @@ import psycopg2
 import os
 from dotenv import load_dotenv
 from datetime import datetime
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from math import radians, cos, sin, asin, sqrt
@@ -12,10 +11,7 @@ from fastapi import Body
 load_dotenv()  # charge .env
 print("DB URL:", os.getenv("DATABASE_URL"))
 
-from fastapi import FastAPI, Form
-from fastapi.middleware.cors import CORSMiddleware
-from allocineAPI.allocineAPI import allocineAPI
-from allocine_wrapper import get_movies_with_showtimes
+from fastapi import FastAPI
 
 app = FastAPI()
 
@@ -27,16 +23,6 @@ app.add_middleware(
   allow_methods=["*"],
   allow_headers=["*"],
 ) 
-
-@app.post("/scrape")
-def scrape(departement_id: str = Form(...)):
-  api = allocineAPI() 
-  try:
-    data = get_movies_with_showtimes(departement_id, datetime.today().strftime('%Y-%m-%d'))
-    # print("Résultats trouvés:", data)
-    return {"success": True, "data": data}
-  except Exception as e:
-    return {"success": False, "error": str(e)}
 
 # Classe pour récupérer lat/lon du client + rayon
 class LocationRequest(BaseModel):
@@ -71,43 +57,92 @@ def cinemas_nearby(req: LocationRequest):
   return {"success": True, "data": nearby}
 
 
+
+# Nouvelle version movies_nearby: utilise seulement la BDD
 @app.post("/movies_nearby")
 def movies_nearby(req: LocationRequest = Body(...)):
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     cursor = conn.cursor()
+        # Récupérer les cinémas avec coordonnées, inclure id interne
     cursor.execute(
-        "SELECT id_allocine, name, address, latitude, longitude FROM cinemas WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        "SELECT id, id_allocine, name, address, latitude, longitude FROM cinemas WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
     )
     cinemas = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    # Calculer les cinémas proches
+    nearby_cinemas = []
 
-    today = datetime.today().strftime('%Y-%m-%d')
+    today = datetime.today().date()
     movies_dict = {}
 
     for c in cinemas:
-        dist = haversine(req.lat, req.lon, c[3], c[4])
+        dist = haversine(req.lat, req.lon, c[4], c[5])
+        print("DEBUG position:", req.lat, req.lon, "rayon:", req.radius_km)
         if dist <= req.radius_km:
-            try:
-                movies = get_movies_with_showtimes(c[0], today)
-            except Exception as e:
-                print(f"❌ Erreur films pour {c[1]} ({c[0]}): {e}")
-                movies = []
+            nearby_cinemas.append({
+                "id": c[0],
+                "id_allocine": c[1],
+                "name": c[2],
+                "address": c[3],
+                "lat": c[4],
+                "lon": c[5],
+                "distance_km": dist
+            })
+    if not nearby_cinemas:
+        cursor.close()
+        conn.close()
+        return {"success": True, "data": []}
 
-            for m in movies:
-                title = m["title"]
-                if title not in movies_dict:
-                    movies_dict[title] = {
-                        "title": title,
-                        "poster": m.get("urlPoster"),
-                        "cinemas": []
-                    }
-                movies_dict[title]["cinemas"].append({
-                    "id": c[0],
-                    "name": c[1],
-                    "address": c[2],
-                    "distance_km": dist,
-                    "showtimes": m["showtimes"]
-                })
+    # Obtenir la liste des id_allocine des cinémas proches
+    cinema_ids = [c["id"] for c in nearby_cinemas]
+
+    # Récupérer tous les showtimes pour ces cinémas (pour aujourd'hui)
+    format_strings = ','.join(['%s'] * len(cinema_ids))
+    query = f"""
+        SELECT s.cinema_id, s.movie_id, s.start_date, s.start_time, s.diffusion_version, s.reservation_url, f.title, f.poster_url, f.duration, f.release_date, f.synopsis
+        FROM showtimes s
+        JOIN films f ON s.movie_id = f.id
+        WHERE s.cinema_id IN ({format_strings})
+        AND s.start_date = %s
+    """
+    params = cinema_ids + [today]
+    cursor.execute(query, params)
+    results = cursor.fetchall()
+    # print("DEBUG results count:", len(results))
+
+    # Construire un dict des cinémas par id pour accès rapide à leur info/distance
+    cinema_dict = {c["id"]: c for c in nearby_cinemas}
+
+    # Grouper les films
+    for row in results:
+        cinema_id, movie_id, start_date, start_time, diffusion_version, reservation_url, title, poster_url, duration, release_date, synopsis = row
+        if title not in movies_dict:
+            movies_dict[title] = {
+                "title": title,
+                "poster": poster_url,
+                "duration": duration,
+                "release_date": release_date,
+                "synopsis": synopsis,
+                "cinemas": []
+            }
+        # Check if cinema already exists in the cinemas list for this movie
+        cinema_info = next((c for c in movies_dict[title]["cinemas"] if c["id"] == cinema_id), None)
+        if not cinema_info:
+            cinema_info = {
+                "id": cinema_id,
+                "name": cinema_dict[cinema_id]["name"],
+                "address": cinema_dict[cinema_id]["address"],
+                "distance_km": cinema_dict[cinema_id]["distance_km"],
+                "showtimes": []
+            }
+            movies_dict[title]["cinemas"].append(cinema_info)
+        # Append the current showtime to the cinema's showtimes list
+        cinema_info["showtimes"].append({
+            "start_date": start_date,
+            "start_time": start_time,
+            "diffusion_version": diffusion_version,
+            "reservation_url": reservation_url
+        })
+    cursor.close()
+    conn.close()
 
     return {"success": True, "data": list(movies_dict.values())}
