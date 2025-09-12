@@ -10,14 +10,18 @@ def get_movies_with_showtimes(cinemaId, date):
     showtimes = api.get_showtime(cinemaId, date)
 
     # 3. Indexer les horaires par titre
-    showtimes_by_title = {s["title"]: s.get("showtimes", []) for s in showtimes}
+    showtimes_by_title = {s["title"]: {"id_allocine": s.get("id_allocine"), "showtimes": s.get("showtimes", [])} for s in showtimes}
 
     # 4. Fusionner infos du film + horaires correspondants
     result = []
     for movie in movies:
         title = movie.get("title")
         movie_with_times = dict(movie)  # toutes les infos du film
-        movie_with_times["showtimes"] = showtimes_by_title.get(title, [])
+        entry = showtimes_by_title.get(title, {})
+        movie_with_times["showtimes"] = entry.get("showtimes", [])
+        if not movie_with_times.get("id_allocine"):
+          movie_with_times["id_allocine"] = entry.get("id_allocine")
+        if not movie_with_times.get("isPremiere"):
+          movie_with_times["isPremiere"] = entry.get("isPremiere", False) 
         result.append(movie_with_times)
-
     return result

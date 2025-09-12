@@ -1,24 +1,79 @@
-
 <script setup>
-import { useGeolocation } from '@/composables/geoloc.js';
+import { ref } from "vue";
+import { useGeolocation } from "@/composables/geoloc.js";
+
 const { position, error, getPosition } = useGeolocation();
+const moviesNearby = ref([]);
+const loading = ref(false);
+
+const fetchNearbyMovies = async () => {
+  loading.value = true;
+  getPosition();
+
+  const waitForPosition = () =>
+    new Promise((resolve) => {
+      const check = setInterval(() => {
+        if (position.value.lat && position.value.lng) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 100);
+    });
+
+  await waitForPosition();
+
+  try {
+    const res = await fetch("http://127.0.0.1:8000/movies_nearby", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lat: position.value.lat,
+        lon: position.value.lng,
+        radius_km: 5,
+      }),
+    });
+
+    const data = await res.json();
+    moviesNearby.value = data.success ? data.data : [];
+  } catch (err) {
+    console.error("Erreur fetch:", err);
+  } finally {
+    loading.value = false;
+  }
+};
 </script>
 
 <template>
   <div>
-    <button @click="getPosition">Obtenir ma position</button>
+    <button @click="fetchNearbyMovies" :disabled="loading">
+      {{ loading ? "Chargement..." : "Chercher les films autour de moi" }}
+    </button>
 
-    <div v-if="position.lat && position.lng">
-      <p>Latitude: {{ position.lat }}</p>
-      <p>Longitude: {{ position.lng }}</p>
-    </div>
+    <div v-if="error" style="color: red">{{ error }}</div>
 
-    <div v-if="error">
-      <p style="color:red">{{ error }}</p>
-    </div>
+    <ul v-if="moviesNearby.length">
+      <li v-for="movie in moviesNearby" :key="movie.title">
+        <h2>{{ movie.title }}</h2>
+        <img v-if="movie.poster" :src="movie.poster" :alt="movie.title" width="100" />
+
+        <ul>
+          <li v-for="cinema in movie.cinemas" :key="cinema.id">
+            <strong>{{ cinema.name }}</strong>
+            ({{ cinema.distance_km ? cinema.distance_km.toFixed(2) : "?" }} km)
+            <p>{{ cinema.address }}</p>
+
+            <ul>
+              <li v-for="show in cinema.showtimes" :key="show.startsAt">
+                {{ show.startsAt }} ({{ show.diffusionVersion }})
+                <a :href="show.reservation_url" target="_blank">Réserver</a>
+              </li>
+                    <br>
+            </ul>
+          </li>
+        </ul>
+      </li>
+    </ul>
+
+    <p v-else-if="!loading">Aucun film trouvé dans le périmètre.</p>
   </div>
 </template>
-
-<script>
-export default {};
-</script>
