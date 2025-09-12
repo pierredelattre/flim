@@ -17,6 +17,23 @@
   width: 100%;
 }
 
+.results__cinema__seance {
+  background-color: #fff;
+  border-radius: 4px;
+  padding: .5rem;
+  margin: .5rem 0;
+}
+
+.results__cinema {
+  background: #EAEAEA;
+  padding: 1rem;
+}
+
+#results > div {
+  display: flex;
+  flex-direction: column;
+}
+
 #results img {
   width: 100%;
   height: auto;

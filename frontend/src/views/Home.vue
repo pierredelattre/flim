@@ -51,27 +51,31 @@ const fetchNearbyMovies = async () => {
 
     <div v-if="error" style="color: red">{{ error }}</div>
 
-    <ul v-if="moviesNearby.length">
-      <li v-for="movie in moviesNearby" :key="movie.title">
+    <div v-if="moviesNearby.length" id="results">
+      <div v-for="movie in moviesNearby" :key="movie.title">
         <h2>{{ movie.title }}</h2>
         <img v-if="movie.poster" :src="movie.poster" :alt="movie.title" width="100" />
 
-        <ul>
-          <li v-for="cinema in movie.cinemas" :key="cinema.id">
+        <router-link :to="{ name: 'Movie', params: { id: movie.id } }">
+          <button>Voir toutes les séances</button>
+        </router-link>
+
+        <div>
+          <div class="results__cinema" v-for="cinema in movie.cinemas" :key="cinema.id">
             <strong>{{ cinema.name }}</strong>
             ({{ cinema.distance_km ? cinema.distance_km.toFixed(2) : "?" }} km)
             <p>{{ cinema.address }}</p>
  
-            <ul>
-              <li v-for="(show, index) in (cinema.showtimes || [])" :key="index">
+            <div>
+              <div class="results__cinema__seance" v-for="(show, index) in (cinema.showtimes || [])" :key="index">
                 {{ show.start_date }} {{ show.start_time }} ({{ show.diffusion_version || "" }})
                 <a v-if="show.reservation_url" :href="show.reservation_url" target="_blank">Réserver</a>
-              </li>
-            </ul>
-          </li>
-        </ul>
-      </li>
-    </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <p v-else-if="!loading">Aucun film trouvé dans le périmètre.</p>
   </div>
