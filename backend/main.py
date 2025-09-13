@@ -39,7 +39,7 @@ def haversine(lat1, lon1, lat2, lon2):
   c = 2*asin(sqrt(a))
   return R * c
 
-@app.post("/cinemas_nearby")
+@app.post("/api/cinemas_nearby")
 def cinemas_nearby(req: LocationRequest):
   conn = psycopg2.connect(os.getenv("DATABASE_URL"))
   cursor = conn.cursor()
@@ -59,7 +59,7 @@ def cinemas_nearby(req: LocationRequest):
 
 
 # Nouvelle version movies_nearby: utilise seulement la BDD
-@app.post("/movies_nearby")
+@app.post("/api/movies_nearby")
 def movies_nearby(req: LocationRequest = Body(...)):
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     cursor = conn.cursor()
@@ -149,7 +149,7 @@ def movies_nearby(req: LocationRequest = Body(...)):
 
     return {"success": True, "data": list(movies_dict.values())}
 
-@app.post("/movie/{movie_id}")
+@app.post("/api/movie/{movie_id}")
 def movie_details(movie_id: int, req: LocationRequest = Body(...)):
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
     cursor = conn.cursor()
