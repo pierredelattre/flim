@@ -23,7 +23,7 @@ const fetchNearbyMovies = async () => {
   await waitForPosition();
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/movies_nearby", {
+    const res = await fetch("/api/movies_nearby", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
