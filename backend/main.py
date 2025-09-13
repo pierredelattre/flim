@@ -217,3 +217,4 @@ def movie_details(movie_id: int, req: LocationRequest = Body(...)):
         "director": director,
         "cinemas": list(cinemas_dict.values())
     }
+  
