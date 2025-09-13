@@ -58,7 +58,7 @@ def main():
     cinemas = cur.fetchall()
     cur.close()
 
-    for offset in range(1, 7):
+    for offset in range(0, 7):
         target_date = (datetime.today() + timedelta(days=offset)).strftime("%Y-%m-%d")
         logger.info("🗓️ Scraping séances pour la date %s", target_date)
 
