@@ -132,8 +132,8 @@ class allocineAPI:
           totalPages = int(json_data["pagination"]["totalPages"])
           for element in json_data["results"]:
               movie = element.get("movie", {})
-              title = movie.get("title")
               movie_id = movie.get("internalId") or movie.get("code")
+              title = movie.get("title")
               is_premiere = movie.get("isPremiere", False)
               showtimes = []
               lst_internal_ids = []
@@ -186,7 +186,7 @@ class allocineAPI:
             for element in json_data["results"]:
                 if element.get("movie") is None:
                     continue
-                internal_id = element["movie"]["internalId"]
+                internal_id = element["movie"].get("internalId") or element["movie"].get("code")
                 if internal_id not in lst_internal_ids:
                     lst_internal_ids.append(internal_id)
 
@@ -351,4 +351,3 @@ if __name__ == '__main__':
     # data = api.get_showtime("P0036", "2025-01-23")
     #
     # print(len(data))
-
