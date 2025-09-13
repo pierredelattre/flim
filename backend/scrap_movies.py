@@ -263,9 +263,9 @@ def main():
     cur.close()
     logger.info("Nombre de cinémas en BDD: %s", len(cinemas))
 
-    # Générer la liste des 7 jours (aujourd'hui + 6 suivants)
+    # Générer la liste d'un seul jour (J+7)
     today_date = datetime.today()
-    days = [(today_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    days = [(today_date + timedelta(days=7)).strftime("%Y-%m-%d")]
     total_tasks = len(cinemas) * len(days)
 
     seen = set()
