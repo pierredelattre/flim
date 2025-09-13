@@ -7,9 +7,11 @@ et insère / met à jour dans la table `movies`.
 
 import os
 import time
+import random
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 # DB
 import psycopg2
@@ -128,7 +130,6 @@ def upsert_movie(conn, movie):
         movie.get("is_premiere"),
         movie.get("director")
     ))
-    conn.commit()
     cur.close()
 
 # --- mapping & ingestion
@@ -155,7 +156,7 @@ def build_movie_dict_from_allocine(raw):
     if isinstance(genre, list):
         genre = ", ".join([str(g) for g in genre])
     # duration: runtime, duration, length
-        duration_raw = safe_get(raw, ["runtime", "duration", "length"])
+    duration_raw = safe_get(raw, ["runtime", "duration", "length"])
     duration = None
     if isinstance(duration_raw, int):
         duration = duration_raw
@@ -236,6 +237,19 @@ def build_movie_dict_from_allocine(raw):
     }
 
 
+def scrape_cinema(cinema_id, cinema_name, day, task_counter, total_tasks, cinema_counter, total_cinemas):
+    """Helper function to scrape movies for a single cinema and a single day."""
+    logger.info("[cinema %d/%d | task %d/%d] Scraping films pour %s (%s) à la date %s", cinema_counter, total_cinemas, task_counter, total_tasks, cinema_name, cinema_id, day)
+    import concurrent.futures
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(get_movies_with_showtimes, cinema_id, day)
+        try:
+            movies = future.result(timeout=15)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"Timeout exceeded for get_movies_with_showtimes({cinema_id}, {day})")
+    return movies
+
+
 def main():
     logger.info("Démarrage scrap films -> BDD")
 
@@ -249,52 +263,95 @@ def main():
     cur.close()
     logger.info("Nombre de cinémas en BDD: %s", len(cinemas))
 
-    today = datetime.today().strftime("%Y-%m-%d")
+    # Générer la liste des 7 jours (aujourd'hui + 6 suivants)
+    today_date = datetime.today()
+    days = [(today_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    total_tasks = len(cinemas) * len(days)
 
     seen = set()
     inserted = 0
     failed = 0
+    task_counter = 0
+    cinema_counter = 0
+    done = 0
 
-    for idx, (cinema_id, cinema_name) in enumerate(cinemas, start=1):
-        logger.info("👉 [%d/%d] Scraping films pour %s (%s)", idx, len(cinemas), cinema_name, cinema_id)
-        try:
-            movies = get_movies_with_showtimes(cinema_id, today)
-        except Exception as e:
-            logger.exception("❌ Erreur get_movies_with_showtimes pour %s (%s): %s", cinema_name, cinema_id, e)
-            failed += 1
-            # pause légère pour pas spammer
-            time.sleep(1)
-            continue
+    batch_size = 300
+    total_cinemas = len(cinemas)
 
-        if not movies:
-            logger.info(" -> aucun film renvoyé pour %s", cinema_name)
-            time.sleep(0.5)
-            continue
+    for batch_start in range(0, total_cinemas, batch_size):
+        batch_end = min(batch_start + batch_size, total_cinemas)
+        batch_cinemas = cinemas[batch_start:batch_end]
+        logger.info("Début du batch de cinémas %d à %d", batch_start + 1, batch_end)
 
-        for raw_movie in movies:
-            movie_dict = build_movie_dict_from_allocine(raw_movie)
-            # print("RAW MOVIE:", raw_movie)
-
-            if not movie_dict:
-                logger.debug(" -> film sans id, skip: %s", raw_movie)
-                continue
-
-            movie_key = movie_dict["id_allocine"]
-            if movie_key in seen:
-                # déjà inséré (ou mis à jour) par un autre cinéma
-                continue
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_task = {}
+            cinema_counter_batch = batch_start
+            for cinema_id, cinema_name in batch_cinemas:
+                cinema_counter_batch += 1
+                logger.info("[%d/%d] Scraping films pour %s (%s)", cinema_counter_batch, total_cinemas, cinema_name, cinema_id)
+                for day in days:
+                    task_counter += 1
+                    future = executor.submit(scrape_cinema, cinema_id, cinema_name, day, task_counter, total_tasks, cinema_counter_batch, total_cinemas)
+                    future_to_task[future] = (cinema_id, cinema_name, day)
 
             try:
-                upsert_movie(conn, movie_dict)
-                seen.add(movie_key)
-                inserted += 1
-                logger.info("✅ + film inséré/maj: %s (%s)", movie_dict.get("title"), movie_key)
-            except Exception as e:
-                logger.exception("❌ Erreur insertion film %s: %s", movie_dict.get("title"), e)
-                failed += 1
+                for future in as_completed(future_to_task, timeout=30):
+                    cinema_id, cinema_name, day = future_to_task[future]
+                    done += 1
+                    if done % 100 == 0:
+                        logger.info("Progression: %d/%d tâches terminées", done, total_tasks)
+                    try:
+                        movies = future.result()
+                    except TimeoutError as e:
+                        logger.exception("❌ Timeout pour get_movies_with_showtimes pour %s (%s) à la date %s: %s", cinema_name, cinema_id, day, e)
+                        failed += 1
+                        continue
+                    except Exception as e:
+                        logger.exception("❌ Erreur get_movies_with_showtimes pour %s (%s) à la date %s: %s", cinema_name, cinema_id, day, e)
+                        failed += 1
+                        continue
 
-        # respecter une petite pause (évite d'overload le wrapper / allociné)
-        time.sleep(0.5)
+                    if not movies:
+                        logger.info(" -> aucun film renvoyé pour %s à la date %s", cinema_name, day)
+                        continue
+
+                    for raw_movie in movies:
+                        movie_dict = build_movie_dict_from_allocine(raw_movie)
+                        # print("RAW MOVIE:", raw_movie)
+
+                        if not movie_dict:
+                            logger.debug(" -> film sans id, skip: %s", raw_movie)
+                            continue
+
+                        movie_key = movie_dict["id_allocine"]
+                        if movie_key in seen:
+                            # déjà inséré (ou mis à jour) par un autre cinéma ou jour
+                            continue
+
+                        try:
+                            upsert_movie(conn, movie_dict)
+                            seen.add(movie_key)
+                            inserted += 1
+                            logger.info("✅ + film inséré/maj: %s (%s)", movie_dict.get("title"), movie_key)
+                        except Exception as e:
+                            logger.exception("❌ Erreur insertion film %s: %s", movie_dict.get("title"), e)
+                            failed += 1
+
+                    try:
+                        conn.commit()
+                    except Exception as e:
+                        logger.exception("❌ Erreur commit pour cinéma %s (%s) à la date %s: %s", cinema_name, cinema_id, day, e)
+                        failed += 1
+            except FuturesTimeoutError:
+                logger.warning("Timeout global sur l'attente des tâches asynchrones, certaines tâches peuvent ne pas être terminées.")
+
+        logger.info("Fin du batch de cinémas %d à %d", batch_start + 1, batch_end)
+        if batch_end < total_cinemas:
+            logger.info("Pause de 10 secondes entre les batches pour limiter la charge")
+            time.sleep(10)
+        # Pause après chaque cinéma complet dans le batch to smooth load
+        # But here we do it after batch, so also add small sleep here
+        time.sleep(random.uniform(0.3, 0.8))
 
     conn.close()
     logger.info("Terminé. Insérés/maj: %d, échoués: %d", inserted, failed)
