@@ -29,7 +29,7 @@ const fetchNearbyMovies = async () => {
       body: JSON.stringify({
         lat: position.value.lat,
         lon: position.value.lng,
-        radius_km: 20,
+        radius_km: 5,
       }),
     });
 

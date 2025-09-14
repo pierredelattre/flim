@@ -40,7 +40,7 @@ onMounted(async () => {
   const body = {
     lat: lat,
     lon: lon,
-    radius_km: 20
+    radius_km: 5
   };
 
   const res = await fetch(`/api/movie/${movieId}`, {

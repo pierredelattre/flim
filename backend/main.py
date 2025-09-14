@@ -28,7 +28,7 @@ app.add_middleware(
 class LocationRequest(BaseModel):
   lat: float
   lon: float
-  radius_km: float = 20
+  radius_km: float = 5
 
 def haversine(lat1, lon1, lat2, lon2):
   # Retourne la distance en km entre 2 points
