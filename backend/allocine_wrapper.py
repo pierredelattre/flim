@@ -1,4 +1,4 @@
-from AllocineAPI.src.allocineAPI.allocineAPI import allocineAPI, URLs
+from allocineAPI.allocineAPI import allocineAPI
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
