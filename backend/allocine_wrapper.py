@@ -1,7 +1,8 @@
 from allocineAPI.allocineAPI import allocineAPI
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 def get_movies_with_showtimes(cinemaId, date):
