@@ -305,7 +305,7 @@ class URLs:
 
     @staticmethod
     def showtime_url(id_cinema, date_str: str, page):
-        return URLs.BASE_URL + URLs.SHOWTIMES + id_cinema + "/d-" + str(date_str) + "/p-" + str(page)
+        return URLs.BASE_URL + URLs.SHOWTIMES + id_cinema + "/d-" + str(date_str) + "/p-" + str(page) + "/"
 
 
 if __name__ == '__main__':
