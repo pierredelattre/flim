@@ -73,8 +73,9 @@ def main():
                 continue
 
             for movie in movies:
-                movie_allocine = movie.get("id_allocine")
+                movie_allocine = movie.get("id_allocine") or movie.get("internalId")
                 title = movie.get("title")
+                logger.debug("DEBUG 🎬 Film: %s -> id_allocine=%s", title, movie_allocine)
                 logger.info("Movie: %s with id_allocine: %s", title, movie_allocine)
 
                 # récupérer l'id interne du film en base

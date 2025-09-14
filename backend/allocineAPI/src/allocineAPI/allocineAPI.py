@@ -156,7 +156,7 @@ class allocineAPI:
                                   break
                           # --- Fin ajout URL réservation ---
                           showtimes.append({
-                              "id_allocine": movie_id,
+                              "id_allocine": movie.get("internalId"),
                               "startsAt": showtime["startsAt"],
                               "diffusionVersion": showtime["diffusionVersion"],
                               "reservation_url": reservation_url  # <-- Ajout ici
