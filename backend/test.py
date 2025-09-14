@@ -33,6 +33,7 @@ api = allocineAPI()
 from allocine_wrapper import get_movies_with_showtimes
 from datetime import datetime
 # Test avec un cinéma
-print(get_movies_with_showtimes("P0047", datetime.today().strftime('%Y-%m-%d')))
-# print(api.get_showtime("P0047", datetime.today().strftime('%Y-%m-%d')))
-# print(api.get_movies("P0047", datetime.today().strftime('%Y-%m-%d')))
+# print(get_movies_with_showtimes("P0047", datetime.today().strftime('%Y-%m-%d')))
+print(api.get_showtime("P0047", datetime.today().strftime('%Y-%m-%d')))
+print("-----")
+print(api.get_movies("P0047", datetime.today().strftime('%Y-%m-%d')))
