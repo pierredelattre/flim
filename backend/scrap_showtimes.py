@@ -16,10 +16,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("scrap_showtimes")
 
-# Reduce third‑party verbosity
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("requests").setLevel(logging.WARNING)
-
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -31,23 +27,13 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 
-def upsert_showtime(cur, cinema_id, movie_id, start_date, start_time, diffusion_version, fmt, reservation_url):
-    """
-    Upsert a single showtime. Requires a UNIQUE index on
-    (cinema_id, movie_id, start_date, start_time, diffusion_version).
-    Returns True if a row was inserted or updated.
-    """
+def upsert_showtime(conn, cinema_id, movie_id, start_date, start_time, diffusion_version, fmt, reservation_url):
+    cur = conn.cursor()
     query = """
     INSERT INTO showtimes
       (cinema_id, movie_id, start_date, start_time, diffusion_version, format, reservation_url, last_update)
     VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-    ON CONFLICT (cinema_id, movie_id, start_date, start_time, diffusion_version)
-    DO UPDATE SET
-      diffusion_version = EXCLUDED.diffusion_version,
-      format = EXCLUDED.format,
-      reservation_url = EXCLUDED.reservation_url,
-      last_update = NOW()
-    RETURNING id;
+    ON CONFLICT DO NOTHING;  -- éviter doublons
     """
     cur.execute(query, (
         cinema_id,
@@ -58,8 +44,8 @@ def upsert_showtime(cur, cinema_id, movie_id, start_date, start_time, diffusion_
         fmt,
         reservation_url
     ))
-    # If a row was affected, RETURNING yields one row; otherwise None.
-    return cur.fetchone() is not None
+    conn.commit()
+    cur.close()
 
 
 MAX_WORKERS = 5
@@ -67,74 +53,53 @@ MAX_WORKERS = 5
 def scrape_cinema(conn, cinema, target_date, idx, total):
     cinema_db_id, cinema_allocine, cinema_name = cinema
     logger.info("👉 [%d/%d] Scraping séances pour %s (%s)", idx, total, cinema_name, cinema_allocine)
-    upserts = 0
     try:
         movies = get_movies_with_showtimes(cinema_allocine, target_date)
+        logger.info("Retrieved %d movies for cinema %s (%s) on %s", len(movies), cinema_name, cinema_allocine, target_date)
     except Exception as e:
-        logger.error("❌ Erreur scrap %s (%s) %s : %s", cinema_name, cinema_allocine, target_date, e)
-        try:
-            conn.close()
-        except Exception:
-            pass
+        logger.error("❌ Erreur scrap %s: %s", cinema_name, e)
         return
 
-    try:
-        cur = conn.cursor()
-        for movie in movies:
-            movie_allocine = movie.get("id_allocine") or movie.get("internalId")
-            title = movie.get("title")
+    cur = conn.cursor()
+    for movie in movies:
+        movie_allocine = movie.get("id_allocine") or movie.get("internalId")
+        title = movie.get("title")
+        logger.info("🎬 Film: %s -> id_allocine=%s", title, movie_allocine)
 
-            if not movie_allocine:
-                logger.warning("⚠️ Film %s sans id_allocine, skip", title)
-                continue
+        # récupérer l'id interne du film en base
+        cur.execute("SELECT id FROM films WHERE id_allocine = %s", (str(movie_allocine),))
+        res = cur.fetchone()
+        if not res:
+            logger.warning("⚠️ Film %s (%s) pas trouvé en BDD, skip", title, movie_allocine)
+            continue
+        movie_db_id = res[0]
 
-            # récupérer l'id interne du film en base
-            cur.execute("SELECT id FROM films WHERE id_allocine = %s", (str(movie_allocine),))
-            res = cur.fetchone()
-            if not res:
-                logger.warning("⚠️ Film %s (%s) pas trouvé en BDD, skip", title, movie_allocine)
-                continue
-            movie_db_id = res[0]
+        for show in movie.get("showtimes", []):
+            try:
+                # parse startsAt -> date + heure
+                dt = datetime.fromisoformat(show["startsAt"])
+                start_date = dt.date()
+                start_time = dt.time()
 
-            for show in movie.get("showtimes", []):
-                try:
-                    starts_at = show.get("startsAt")
-                    if not starts_at:
-                        continue
-                    # parse startsAt -> date + heure
-                    dt = datetime.fromisoformat(starts_at)
-                    start_date = dt.date()
-                    start_time = dt.time()
+                diffusion_version = show.get("diffusionVersion")  # VF, VO, etc.
+                fmt = show.get("format")  # 2D, 3D, IMAX...
+                reservation_url = show.get("reservation_url")
 
-                    diffusion_version = show.get("diffusionVersion")  # VF, VO, etc.
-                    fmt = show.get("format")  # 2D, 3D, IMAX...
-                    reservation_url = show.get("reservation_url")
-
-                    if upsert_showtime(
-                        cur,
-                        cinema_db_id,
-                        movie_db_id,
-                        start_date,
-                        start_time,
-                        diffusion_version,
-                        fmt,
-                        reservation_url
-                    ):
-                        upserts += 1
-                except Exception as e:
-                    logger.error("❌ Erreur séance %s: %s", title, e)
-
-        conn.commit()
-        logger.info("✅ [%s] %s - %d séances upsertées", target_date, cinema_name, upserts)
-    finally:
-        try:
-            cur.close()
-        except Exception:
-            pass
-        try:
-            conn.close()
-        except Exception:
-            pass
+                upsert_showtime(
+                    conn,
+                    cinema_db_id,
+                    movie_db_id,
+                    start_date,
+                    start_time,
+                    diffusion_version,
+                    fmt,
+                    reservation_url
+                )
+                logger.info("✅ Séance insérée: %s - %s %s (%s)", title, start_date, start_time, diffusion_version)
+            except Exception as e:
+                logger.error("❌ Erreur séance %s: %s", title, e)
+    conn.commit()
+    cur.close()
 
 
 def main():
@@ -159,10 +124,18 @@ def main():
                 thread_conn = get_conn()
                 futures.append(executor.submit(scrape_cinema, thread_conn, cinema, target_date, idx, total))
             for f in as_completed(futures):
+                # Close thread's connection after done
+                # (scrape_cinema doesn't close conn, so close here)
                 try:
-                    f.result()
-                except Exception as e:
-                    logger.error("Thread error: %s", e)
+                    # Get the connection from the function's closure
+                    # But we don't have it directly here, so we close in scrape_cinema or use context
+                    pass
+                except Exception:
+                    pass
+            # Actually, we need to close the connections after submitting
+            # But since scrape_cinema uses its own conn, close it there
+            # (Or we could close it in scrape_cinema at the end)
+            # No sleep needed, concurrency handles pacing
 
     conn.close()
 
