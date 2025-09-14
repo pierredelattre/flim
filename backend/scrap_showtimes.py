@@ -67,14 +67,15 @@ def main():
 
             try:
                 movies = get_movies_with_showtimes(cinema_allocine, target_date)
+                logger.info("Retrieved %d movies for cinema %s (%s) on %s", len(movies), cinema_name, cinema_allocine, target_date)
             except Exception as e:
                 logger.error("❌ Erreur scrap %s: %s", cinema_name, e)
                 continue
 
             for movie in movies:
                 movie_allocine = movie.get("id_allocine")
-                print(f"id_allocine from movie_allocine : ", movie_allocine)
                 title = movie.get("title")
+                logger.info("Movie: %s with id_allocine: %s", title, movie_allocine)
 
                 # récupérer l'id interne du film en base
                 cur = conn.cursor()
