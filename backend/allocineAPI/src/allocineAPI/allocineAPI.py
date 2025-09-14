@@ -139,7 +139,7 @@ class allocineAPI:
                   or None
               )
               title = movie.get("title")
-              print(f"DEBUG 🎬 get_showtime -> Film: {title}, internalId={movie.get('internalId')}, code={movie.get('code')}, id={movie.get('id')}, final={movie_id}")
+              # print(f"DEBUG 🎬 get_showtime -> Film: {title}, internalId={movie.get('internalId')}, code={movie.get('code')}, id={movie.get('id')}, final={movie_id}")
               is_premiere = movie.get("isPremiere", False)
               showtimes = []
               lst_internal_ids = []
@@ -195,8 +195,8 @@ class allocineAPI:
             for element in json_data["results"]:
                 if element.get("movie") is None:
                     continue
-                print("DEBUG KEYS:", element["movie"].keys())
-                print("DEBUG RAW:", json.dumps(element["movie"], indent=2, ensure_ascii=False))
+                # print("DEBUG KEYS:", element["movie"].keys())
+                # print("DEBUG RAW:", json.dumps(element["movie"], indent=2, ensure_ascii=False))
                 title = element["movie"].get("title")
                 internal_id = (
                     element["movie"].get("internalId")
@@ -204,7 +204,7 @@ class allocineAPI:
                     or element["movie"].get("id")
                     or None
                 )
-                print(f"DEBUG 🎬 get_movies -> Film: {title}, internalId={element['movie'].get('internalId')}, code={element['movie'].get('code')}, id={element['movie'].get('id')}, final={internal_id}")
+                # print(f"DEBUG 🎬 get_movies -> Film: {title}, internalId={element['movie'].get('internalId')}, code={element['movie'].get('code')}, id={element['movie'].get('id')}, final={internal_id}")
                 if internal_id not in lst_internal_ids:
                     lst_internal_ids.append(internal_id)
 
