@@ -132,6 +132,18 @@ def main():
         for f in as_completed(futures):
             pass
 
+    yesterday = (datetime.today() - timedelta(days=1)).date()
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM showtimes WHERE start_date = %s", (yesterday,))
+        deleted_rows = cur.rowcount
+        conn.commit()
+        cur.close()
+        logger.info("🗑️ Deleted %d showtimes older than %s", deleted_rows, yesterday)
+    finally:
+        release_conn(conn)
+
 
 if __name__ == "__main__":
     main()
