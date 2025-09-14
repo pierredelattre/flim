@@ -161,7 +161,9 @@ class allocineAPI:
                   "id_allocine": movie_id,
                   "title": title,
                   "isPremiere": is_premiere,
-                  "showtimes": showtimes
+                  "showtimes": showtimes,
+                  "internalId": movie.get("internalId"),
+                  "code": movie.get("code")
               })
 
       return formated_data
