@@ -132,9 +132,14 @@ class allocineAPI:
           totalPages = int(json_data["pagination"]["totalPages"])
           for element in json_data["results"]:
               movie = element.get("movie", {})
-              movie_id = movie.get("internalId") or movie.get("code")
+              movie_id = (
+                  movie.get("internalId")
+                  or movie.get("code")
+                  or movie.get("id")  # fallback if only 'id' exists (e.g. base64)
+                  or None
+              )
               title = movie.get("title")
-              print(f"DEBUG 🎬 get_showtime -> Film: {title}, internalId={movie.get('internalId')}, code={movie.get('code')}, final={movie_id}")
+              print(f"DEBUG 🎬 get_showtime -> Film: {title}, internalId={movie.get('internalId')}, code={movie.get('code')}, id={movie.get('id')}, final={movie_id}")
               is_premiere = movie.get("isPremiere", False)
               showtimes = []
               lst_internal_ids = []
@@ -193,8 +198,13 @@ class allocineAPI:
                 print("DEBUG KEYS:", element["movie"].keys())
                 print("DEBUG RAW:", json.dumps(element["movie"], indent=2, ensure_ascii=False))
                 title = element["movie"].get("title")
-                internal_id = element["movie"].get("internalId") or element["movie"].get("code")
-                print(f"DEBUG 🎬 get_movies -> Film: {title}, internalId={element['movie'].get('internalId')}, code={element['movie'].get('code')}, final={internal_id}")
+                internal_id = (
+                    element["movie"].get("internalId")
+                    or element["movie"].get("code")
+                    or element["movie"].get("id")
+                    or None
+                )
+                print(f"DEBUG 🎬 get_movies -> Film: {title}, internalId={element['movie'].get('internalId')}, code={element['movie'].get('code')}, id={element['movie'].get('id')}, final={internal_id}")
                 if internal_id not in lst_internal_ids:
                     lst_internal_ids.append(internal_id)
 
