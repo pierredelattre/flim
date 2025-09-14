@@ -73,6 +73,7 @@ def main():
 
             for movie in movies:
                 movie_allocine = movie.get("id_allocine")
+                print(f"id_allocine from movie_allocine : ", movie_allocine)
                 title = movie.get("title")
 
                 # récupérer l'id interne du film en base
