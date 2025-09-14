@@ -320,7 +320,7 @@ def main():
                         # print("RAW MOVIE:", raw_movie)
 
                         if not movie_dict:
-                            logger.debug(" -> film sans id, skip: %s", raw_movie)
+                            logger.info(" -> film sans id, skip: %s", raw_movie)
                             continue
 
                         movie_key = movie_dict["id_allocine"]
