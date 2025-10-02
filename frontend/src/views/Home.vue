@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch, computed } from "vue";
 import { useGeolocation } from "@/composables/geoloc.js";
 
 const { position, error: geoError, getPosition } = useGeolocation();
@@ -88,6 +88,56 @@ const typeLabels = {
 };
 let suggestionsDebounceId;
 let suppressNextSuggestionFetch = false;
+
+// --- Time helpers to hide past showtimes ---
+const now = ref(new Date());
+let nowTimerId;
+
+const parseShowStart = (show) => {
+  try {
+    // Prefer a direct ISO datetime if present
+    if (show?.startsAt) {
+      const d = new Date(show.startsAt);
+      return isNaN(d) ? null : d;
+      }
+    // Otherwise, rebuild from date + time fields
+    const dStr = show?.start_date;
+    let tStr = show?.start_time;
+    if (!dStr || !tStr) return null;
+
+    // Normalize HH:MM → HH:MM:SS
+    if (/^\d{2}:\d{2}$/.test(tStr)) {
+      tStr = tStr + ":00";
+    }
+    const iso = `${dStr}T${tStr}`;
+    const d = new Date(iso);
+    return isNaN(d) ? null : d;
+  } catch {
+    return null;
+  }
+};
+
+// Compute list of movies with only future showtimes
+const upcomingMovies = computed(() => {
+  const nowVal = now.value;
+  if (!Array.isArray(moviesNearby.value)) return [];
+
+  return moviesNearby.value
+    .map((movie) => {
+      const cinemas = (movie.cinemas || [])
+        .map((cinema) => {
+          const showtimes = (cinema.showtimes || []).filter((s) => {
+            const dt = parseShowStart(s);
+            return dt && dt >= nowVal;
+          });
+          return { ...cinema, showtimes };
+        })
+        .filter((c) => (c.showtimes || []).length > 0); // keep cinemas that still have future showtimes
+
+      return { ...movie, cinemas };
+    })
+    .filter((m) => (m.cinemas || []).length > 0); // keep movies that still have at least one future showtime
+});
 
 const resetSuggestions = () => {
   suggestions.value = [];
@@ -418,6 +468,9 @@ const onSearchKeydown = (event) => {
 
 onMounted(() => {
   document.addEventListener("click", handleClickOutside);
+  nowTimerId = setInterval(() => {
+    now.value = new Date();
+  }, 60_000);
   if (typeof currentPosition.value?.lat === "number" && typeof currentPosition.value?.lon === "number") {
     fetchMovies();
   }
@@ -430,12 +483,24 @@ onBeforeUnmount(() => {
     clearTimeout(suggestionsDebounceId);
     suggestionsDebounceId = undefined;
   }
+  if (nowTimerId) {
+    clearInterval(nowTimerId);
+    nowTimerId = undefined;
+  }
 });
 </script>
 
 <template>
   <div class="home">
     <div class="controls">
+      <button
+        v-if="activeFilter.mode !== 'all'"
+        @click="resetToAll"
+        :disabled="loading"
+        title="Revenir à la vue initiale (tous les films et cinémas autour de moi)"
+      >
+        ← Retour
+      </button>
       <div class="search" ref="searchContainer">
         <input
           type="search"
@@ -475,14 +540,6 @@ onBeforeUnmount(() => {
       <button @click="fetchNearbyMovies" :disabled="loading">
         {{ loading ? "Chargement..." : "Autour de moi" }}
       </button>
-      <button
-        v-if="activeFilter.mode !== 'all'"
-        @click="resetToAll"
-        :disabled="loading"
-        title="Revenir à la vue initiale (tous les films et cinémas autour de moi)"
-      >
-        ← Retour
-      </button>
 
       <label class="radius">
         Rayon de recherche
@@ -497,8 +554,8 @@ onBeforeUnmount(() => {
       </label>
     </div>
 
-    <div v-if="moviesNearby.length" id="results">
-      <div v-for="movie in moviesNearby" :key="movie.id ?? movie.title" class="movie">
+    <div v-if="upcomingMovies.length" id="results">
+      <div v-for="movie in upcomingMovies" :key="movie.id ?? movie.title" class="movie">
         <h2>{{ movie.title }}</h2>
         <img v-if="movie.poster" :src="movie.poster" :alt="movie.title" width="100" />
 
@@ -530,6 +587,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <p v-else-if="!loading">Aucun film trouvé dans le périmètre.</p>
+    <p v-else-if="!loading">Aucun film avec séance à venir dans le périmètre.</p>
   </div>
 </template>
