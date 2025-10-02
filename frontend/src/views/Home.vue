@@ -8,6 +8,7 @@ const moviesNearby = ref([]);
 const loading = ref(false);
 const fetchError = ref("");
 const lastSearchCenter = ref(null);
+const lastRequestOptions = ref(null);
 
 const readStoredNumber = (key) => {
   if (typeof window === "undefined") {
@@ -43,6 +44,7 @@ const radiusKm = ref(defaultRadius);
 const currentPosition = ref(readStoredPosition());
 const radiusToast = ref("");
 let radiusToastTimeoutId;
+let radiusRefetchTimeoutId;
 
 const clearRadiusToast = () => {
   if (radiusToastTimeoutId) {
@@ -66,6 +68,22 @@ watch(radiusKm, (next, previous) => {
   }
   persistNumber("radius_km", next);
   showRadiusToast(next);
+
+  // Debounce the refetch to avoid spamming the backend when the user scrolls the dropdown
+  if (radiusRefetchTimeoutId) {
+    clearTimeout(radiusRefetchTimeoutId);
+  }
+  radiusRefetchTimeoutId = setTimeout(async () => {
+    try {
+      // Reuse the last request context if we have one (movie/cinema/city/geolocate)
+      const opts = lastRequestOptions.value ? { ...lastRequestOptions.value } : {};
+      // Never force geolocation on radius change; keep current center unless explicitly requested later
+      if (opts.forceGeolocate) delete opts.forceGeolocate;
+      await fetchMovies(opts);
+    } finally {
+      radiusRefetchTimeoutId = undefined;
+    }
+  }, 200);
 });
 
 const formatCoordinate = (value) => {
@@ -352,6 +370,7 @@ const resetToAll = async () => {
   closeSuggestions();
   activeFilter.value = { mode: "all", label: "" };
   lastSearchCenter.value = null;
+  lastRequestOptions.value = null;
 
   // Re-fetch around current geolocated position
   await fetchMovies({ forceGeolocate: true });
@@ -360,6 +379,9 @@ const resetToAll = async () => {
 const fetchMovies = async (options = {}) => {
   loading.value = true;
   fetchError.value = "";
+
+  const optionsToRemember = { ...options };
+  if (optionsToRemember.forceGeolocate) delete optionsToRemember.forceGeolocate;
 
   try {
     const body = await buildMoviesRequestBody(options);
@@ -394,6 +416,7 @@ const fetchMovies = async (options = {}) => {
     } else if (typeof body.lat === "number" && typeof body.lon === "number") {
       applySearchCenter(body.lat, body.lon);
     }
+    lastRequestOptions.value = optionsToRemember;
   } catch (error) {
     console.error("Erreur fetch:", error);
     fetchError.value = error instanceof Error ? error.message : "Erreur inconnue";
@@ -404,6 +427,7 @@ const fetchMovies = async (options = {}) => {
 
 const fetchNearbyMovies = async () => {
   await fetchMovies({ forceGeolocate: true });
+  lastRequestOptions.value = {}; // reset to default geolocate-based search
 };
 
 const selectSuggestion = async (suggestion) => {
@@ -414,10 +438,12 @@ const selectSuggestion = async (suggestion) => {
 
   if (suggestion.type === "film") {
     await fetchMovies({ movieId: Number(suggestion.id) });
+    lastRequestOptions.value = { movieId: Number(suggestion.id) };
     return;
   }
   if (suggestion.type === "cinema") {
     await fetchMovies({ cinemaId: Number(suggestion.id) });
+    lastRequestOptions.value = { cinemaId: Number(suggestion.id) };
     return;
   }
   if (suggestion.type === "city") {
@@ -426,6 +452,7 @@ const selectSuggestion = async (suggestion) => {
       return;
     }
     await fetchMovies({ overrideLocation: true, centerLat: suggestion.lat, centerLon: suggestion.lon });
+    lastRequestOptions.value = { overrideLocation: true, centerLat: suggestion.lat, centerLon: suggestion.lon };
   }
 };
 
@@ -486,6 +513,10 @@ onBeforeUnmount(() => {
   if (nowTimerId) {
     clearInterval(nowTimerId);
     nowTimerId = undefined;
+  }
+  if (radiusRefetchTimeoutId) {
+    clearTimeout(radiusRefetchTimeoutId);
+    radiusRefetchTimeoutId = undefined;
   }
 });
 </script>
