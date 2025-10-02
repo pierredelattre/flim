@@ -1,220 +1,472 @@
-# Charger variables BDD
-import psycopg2
+import logging
 import os
+from datetime import date, timedelta
+from typing import List, Optional
+
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from math import radians, cos, sin, asin, sqrt
-from fastapi import Body
+from pydantic import BaseModel, model_validator
 
-load_dotenv()  # charge .env
-print("DB URL:", os.getenv("DATABASE_URL"))
+load_dotenv()
 
-from fastapi import FastAPI
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+  logging.warning("DATABASE_URL environment variable is not set")
 
 app = FastAPI()
 
-# Autoriser le frontend Vue (en dev sur :5173)
 app.add_middleware(
   CORSMiddleware,
-  allow_origins=["http://localhost:5173"],
+  allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
   allow_credentials=True,
   allow_methods=["*"],
   allow_headers=["*"],
-) 
+)
 
-# Classe pour récupérer lat/lon du client + rayon
-class LocationRequest(BaseModel):
+
+def get_connection() -> psycopg2.extensions.connection:
+  if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not configured")
+  return psycopg2.connect(DATABASE_URL)
+
+
+def distance_sql(prefix: str = "c") -> str:
+  return f"""
+    2 * 6371 * ASIN(
+      SQRT(
+        LEAST(
+          1.0,
+          POWER(SIN(RADIANS({prefix}.lat - %(center_lat)s) / 2), 2) +
+          COS(RADIANS(%(center_lat)s)) * COS(RADIANS({prefix}.lat)) *
+          POWER(SIN(RADIANS({prefix}.lon - %(center_lon)s) / 2), 2)
+        )
+      )
+    )
+  """
+
+
+class MoviesNearbyRequest(BaseModel):
+  lat: Optional[float] = None
+  lon: Optional[float] = None
+  radius_km: Optional[float] = None
+  movie_id: Optional[int] = None
+  cinema_id: Optional[int] = None
+  override_location: bool = False
+  center_lat: Optional[float] = None
+  center_lon: Optional[float] = None
+
+  @model_validator(mode="after")
+  def ensure_coordinates(self):
+    # Guard against NaN values getting through as floats
+    def _is_nan(x):
+      try:
+        return isinstance(x, float) and x != x
+      except Exception:
+        return False
+
+    if self.lat is not None and _is_nan(self.lat):
+      raise ValueError("lat must be a number")
+    if self.lon is not None and _is_nan(self.lon):
+      raise ValueError("lon must be a number")
+    if self.center_lat is not None and _is_nan(self.center_lat):
+      raise ValueError("center_lat must be a number")
+    if self.center_lon is not None and _is_nan(self.center_lon):
+      raise ValueError("center_lon must be a number")
+
+    if self.override_location:
+      if self.center_lat is None or self.center_lon is None:
+        raise ValueError("center_lat and center_lon are required when override_location is true")
+    else:
+      if self.lat is None or self.lon is None:
+        raise ValueError("lat and lon are required unless override_location is true")
+
+    return self
+
+
+class MovieDetailsRequest(BaseModel):
   lat: float
   lon: float
   radius_km: float = 5
 
-def haversine(lat1, lon1, lat2, lon2):
-  # Retourne la distance en km entre 2 points
-  R = 6371  # rayon Terre en km
-  dlat = radians(lat2 - lat1)
-  dlon = radians(lon2 - lon1)
-  a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-  c = 2*asin(sqrt(a))
-  return R * c
 
-@app.post("/api/cinemas_nearby")
-def cinemas_nearby(req: LocationRequest):
-  conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-  cursor = conn.cursor()
-  cursor.execute("SELECT id_allocine, name, address, latitude, longitude FROM cinemas WHERE latitude IS NOT NULL AND longitude IS NOT NULL")
-  cinemas = cursor.fetchall()
-  cursor.close()
-  conn.close()
+def ensure_search_schema() -> None:
+  """Create the geo_cities table, pg_trgm extension, and required indexes if missing."""
+  try:
+    conn = get_connection()
+  except Exception as exc:
+    logging.error("Unable to connect to database while ensuring schema: %s", exc)
+    return
 
-  # Filtrer par distance
-  nearby = []
-  for c in cinemas:
-    dist = haversine(req.lat, req.lon, c[3], c[4])
-    if dist <= req.radius_km:
-      nearby.append({"id": c[0], "name": c[1], "address": c[2], "lat": c[3], "lon": c[4], "distance_km": dist})
-  return {"success": True, "data": nearby}
-
-
-
-# Nouvelle version movies_nearby: utilise seulement la BDD
-@app.post("/api/movies_nearby")
-def movies_nearby(req: LocationRequest = Body(...)):
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    cursor = conn.cursor()
-        # Récupérer les cinémas avec coordonnées, inclure id interne
-    cursor.execute(
-        "SELECT id, id_allocine, name, address, latitude, longitude FROM cinemas WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
-    )
-    cinemas = cursor.fetchall()
-    # Calculer les cinémas proches
-    nearby_cinemas = []
-
-    today = datetime.today().date()
-    movies_dict = {}
-
-    for c in cinemas:
-        dist = haversine(req.lat, req.lon, c[4], c[5])
-        print("DEBUG position:", req.lat, req.lon, "rayon:", req.radius_km)
-        if dist <= req.radius_km:
-            nearby_cinemas.append({
-                "id": c[0],
-                "id_allocine": c[1],
-                "name": c[2],
-                "address": c[3],
-                "lat": c[4],
-                "lon": c[5],
-                "distance_km": dist
-            })
-    if not nearby_cinemas:
-        cursor.close()
-        conn.close()
-        return {"success": True, "data": []}
-
-    # Obtenir la liste des id_allocine des cinémas proches
-    cinema_ids = [c["id"] for c in nearby_cinemas]
-
-    # Récupérer tous les showtimes pour ces cinémas (pour aujourd'hui)
-    format_strings = ','.join(['%s'] * len(cinema_ids))
-    query = f"""
-        SELECT s.cinema_id, s.movie_id, f.id, s.start_date, s.start_time, s.diffusion_version, s.reservation_url, f.title, f.poster_url, f.duration, f.release_date, f.synopsis
-        FROM showtimes s
-        JOIN films f ON s.movie_id = f.id
-        WHERE s.cinema_id IN ({format_strings})
-        AND s.start_date = %s
-    """
-    params = cinema_ids + [today]
-    cursor.execute(query, params)
-    results = cursor.fetchall()
-    print(results)
-    # print("DEBUG results count:", len(results))
-
-    # Construire un dict des cinémas par id pour accès rapide à leur info/distance
-    cinema_dict = {c["id"]: c for c in nearby_cinemas}
-
-    # Grouper les films
-    for row in results:
-        cinema_id, movie_id, film_id, start_date, start_time, diffusion_version, reservation_url, title, poster_url, duration, release_date, synopsis = row
-        if title not in movies_dict:
-            movies_dict[title] = {
-                "id": film_id,
-                "title": title,
-                "poster": poster_url,
-                "duration": duration,
-                "release_date": release_date,
-                "synopsis": synopsis,
-                "cinemas": []
-            }
-        # Check if cinema already exists in the cinemas list for this movie
-        cinema_info = next((c for c in movies_dict[title]["cinemas"] if c["id"] == cinema_id), None)
-        if not cinema_info:
-            cinema_info = {
-                "id": cinema_id,
-                "name": cinema_dict[cinema_id]["name"],
-                "address": cinema_dict[cinema_id]["address"],
-                "distance_km": cinema_dict[cinema_id]["distance_km"],
-                "showtimes": []
-            }
-            movies_dict[title]["cinemas"].append(cinema_info)
-        # Append the current showtime to the cinema's showtimes list
-        cinema_info["showtimes"].append({
-            "start_date": start_date,
-            "start_time": start_time,
-            "diffusion_version": diffusion_version,
-            "reservation_url": reservation_url
-        })
-    cursor.close()
+  try:
+    conn.autocommit = True
+    with conn.cursor() as cur:
+      cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+      cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS geo_cities (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          zipcode TEXT,
+          lat DOUBLE PRECISION NOT NULL,
+          lon DOUBLE PRECISION NOT NULL
+        );
+        """
+      )
+      index_commands: List[sql.SQL] = [
+        sql.SQL("CREATE INDEX IF NOT EXISTS idx_films_title_trgm ON films USING gin (title gin_trgm_ops);")
+      ]
+      index_commands.append(
+        sql.SQL("CREATE INDEX IF NOT EXISTS idx_films_original_title_trgm ON films USING gin (original_title gin_trgm_ops);")
+      )
+      index_commands.append(
+        sql.SQL("CREATE INDEX IF NOT EXISTS idx_cinemas_name_trgm ON cinemas USING gin (name gin_trgm_ops);")
+      )
+      index_commands.append(
+        sql.SQL("CREATE INDEX IF NOT EXISTS idx_cities_name_trgm ON geo_cities USING gin (name gin_trgm_ops);")
+      )
+      index_commands.append(
+        sql.SQL("CREATE INDEX IF NOT EXISTS idx_cities_zipcode_trgm ON geo_cities USING gin (zipcode gin_trgm_ops);")
+      )
+      for statement in index_commands:
+        cur.execute(statement)
+  except Exception as exc:
+    logging.error("Error ensuring search schema: %s", exc)
+  finally:
     conn.close()
 
-    return {"success": True, "data": list(movies_dict.values())}
+
+@app.on_event("startup")
+def on_startup() -> None:
+  ensure_search_schema()
+
+
+@app.get("/api/search_suggest")
+def search_suggest(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=25)):
+  query_text = q.strip()
+  if not query_text:
+    return {"suggestions": []}
+
+  pattern = "%" + query_text.replace("%", "\\%").replace("_", "\\_") + "%"
+  params = {"pattern": pattern}
+
+  try:
+    conn = get_connection()
+  except Exception as exc:
+    logging.error("Database connection error during search_suggest: %s", exc)
+    raise HTTPException(status_code=500, detail="Database connection error")
+
+  films: List[dict] = []
+  cinemas: List[dict] = []
+  cities: List[dict] = []
+
+  try:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(
+        """
+        SELECT id, title, COALESCE(NULLIF(original_title, ''), '') AS original_title
+        FROM films
+        WHERE title ILIKE %(pattern)s ESCAPE '\\'
+           OR original_title ILIKE %(pattern)s ESCAPE '\\'
+        ORDER BY title ASC
+        LIMIT %(limit)s;
+        """,
+        {**params, "limit": limit},
+      )
+      films = cur.fetchall()
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(
+        """
+        SELECT id, name, lat, lon
+        FROM cinemas
+        WHERE name ILIKE %(pattern)s ESCAPE '\\'
+        ORDER BY name ASC
+        LIMIT %(limit)s;
+        """,
+        {**params, "limit": limit},
+      )
+      cinemas = cur.fetchall()
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(
+        """
+        SELECT id, name, COALESCE(zipcode, '') AS zipcode, lat, lon
+        FROM geo_cities
+        WHERE name ILIKE %(pattern)s ESCAPE '\\'
+           OR zipcode ILIKE %(pattern)s ESCAPE '\\'
+        ORDER BY name ASC
+        LIMIT %(limit)s;
+        """,
+        {**params, "limit": limit},
+      )
+      cities = cur.fetchall()
+  finally:
+    conn.close()
+
+  suggestions: List[dict] = []
+
+  for row in films:
+    suggestion = {
+      "type": "film",
+      "id": row["id"],
+      "label": row["title"],
+    }
+    if row.get("original_title") and row["original_title"].lower() != row["title"].lower():
+      suggestion["sublabel"] = row["original_title"]
+    suggestions.append(suggestion)
+    if len(suggestions) >= limit:
+      return {"suggestions": suggestions}
+
+  for row in cinemas:
+    suggestion = {
+      "type": "cinema",
+      "id": row["id"],
+      "label": row["name"],
+    }
+    if row.get("lat") is not None and row.get("lon") is not None:
+      suggestion["lat"] = float(row["lat"])
+      suggestion["lon"] = float(row["lon"])
+    suggestions.append(suggestion)
+    if len(suggestions) >= limit:
+      return {"suggestions": suggestions}
+
+  for row in cities:
+    suggestion = {
+      "type": "city",
+      "id": row["id"],
+      "label": row["name"],
+      "lat": float(row["lat"]),
+      "lon": float(row["lon"]),
+    }
+    if row.get("zipcode"):
+      suggestion["sublabel"] = row["zipcode"]
+    suggestions.append(suggestion)
+    if len(suggestions) >= limit:
+      return {"suggestions": suggestions}
+
+  return {"suggestions": suggestions}
+
+
+@app.post("/api/movies_nearby")
+def movies_nearby(req: MoviesNearbyRequest = Body(...)):
+  radius = req.radius_km if req.radius_km and req.radius_km > 0 else 5
+  center_lat = req.center_lat if req.override_location else req.lat
+  center_lon = req.center_lon if req.override_location else req.lon
+
+  # Extra guard in case NaN slips through
+  if isinstance(center_lat, float) and center_lat != center_lat:
+    raise HTTPException(status_code=422, detail="Invalid latitude")
+  if isinstance(center_lon, float) and center_lon != center_lon:
+    raise HTTPException(status_code=422, detail="Invalid longitude")
+
+  if center_lat is None or center_lon is None:
+    raise HTTPException(status_code=400, detail="Missing coordinates")
+
+  dist_expr = distance_sql("c")
+  today = date.today()
+
+  where_clauses = ["c.lat IS NOT NULL", "c.lon IS NOT NULL", "s.start_date >= %(today)s"]
+  params = {
+    "center_lat": center_lat,
+    "center_lon": center_lon,
+    "radius_km": radius,
+    "today": today,
+  }
+
+  if req.movie_id is not None:
+    where_clauses.append("s.movie_id = %(movie_id)s")
+    params["movie_id"] = req.movie_id
+
+  if req.cinema_id is not None:
+    where_clauses.append("s.cinema_id = %(cinema_id)s")
+    params["cinema_id"] = req.cinema_id
+  else:
+    where_clauses.append(f"{dist_expr} <= %(radius_km)s")
+
+  query = f"""
+    SELECT
+      m.id AS film_id,
+      m.title,
+      COALESCE(m.original_title, '') AS original_title,
+      m.poster_url,
+      m.duration,
+      m.release_date,
+      m.synopsis,
+      c.id AS cinema_id,
+      c.name AS cinema_name,
+      c.address,
+      c.lat,
+      c.lon,
+      {dist_expr} AS distance_km,
+      s.start_date,
+      s.start_time,
+      s.diffusion_version,
+      s.format,
+      s.reservation_url
+    FROM showtimes s
+    JOIN cinemas c ON c.id = s.cinema_id
+    JOIN films m ON m.id = s.movie_id
+    WHERE {' AND '.join(where_clauses)}
+    ORDER BY m.title ASC, c.name ASC, s.start_date ASC, s.start_time ASC;
+  """
+
+  try:
+    conn = get_connection()
+  except Exception as exc:
+    logging.error("Database connection error during movies_nearby: %s", exc)
+    raise HTTPException(status_code=500, detail="Database connection error")
+
+  movies = {}
+  try:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(query, params)
+      rows = cur.fetchall()
+  finally:
+    conn.close()
+
+  for row in rows:
+    film_id = row["film_id"]
+    movie = movies.get(film_id)
+    if not movie:
+      movie = {
+        "id": film_id,
+        "title": row["title"],
+        "original_title": row.get("original_title") or None,
+        "poster": row.get("poster_url"),
+        "duration": row.get("duration"),
+        "release_date": row.get("release_date"),
+        "synopsis": row.get("synopsis"),
+        "cinemas": [],
+      }
+      movies[film_id] = movie
+
+    cinemas_list = movie["cinemas"]
+    cinema = next((c for c in cinemas_list if c["id"] == row["cinema_id"]), None)
+    if not cinema:
+      cinema = {
+        "id": row["cinema_id"],
+        "name": row["cinema_name"],
+        "address": row.get("address"),
+        "lat": float(row["lat"]) if row.get("lat") is not None else None,
+        "lon": float(row["lon"]) if row.get("lon") is not None else None,
+        "distance_km": float(row["distance_km"]) if row.get("distance_km") is not None else None,
+        "showtimes": [],
+      }
+      cinemas_list.append(cinema)
+
+    cinema["showtimes"].append({
+      "start_date": row["start_date"].isoformat() if isinstance(row["start_date"], date) else row["start_date"],
+      "start_time": row["start_time"].isoformat() if hasattr(row["start_time"], "isoformat") else row["start_time"],
+      "diffusion_version": row.get("diffusion_version"),
+      "format": row.get("format"),
+      "reservation_url": row.get("reservation_url"),
+    })
+
+  response_payload = {
+    "success": True,
+    "center_lat": center_lat,
+    "center_lon": center_lon,
+    "radius_km": radius,
+    "data": list(movies.values()),
+  }
+
+  return response_payload
+
 
 @app.post("/api/movie/{movie_id}")
-def movie_details(movie_id: int, req: LocationRequest = Body(...)):
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    cursor = conn.cursor()
-    # Récupérer les détails du film
-    cursor.execute(
-        "SELECT title, poster_url, duration, release_date, synopsis, director FROM films WHERE id = %s",
-        (movie_id,)
-    )
-    film = cursor.fetchone()
-    if not film:
-        cursor.close()
-        conn.close()
-        return {"success": False, "error": "Film not found"}
+def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
+  radius = req.radius_km if req.radius_km and req.radius_km > 0 else 5
+  dist_expr = distance_sql("c")
+  today = date.today()
+  end_date = today + timedelta(days=6)
 
-    title, poster_url, duration, release_date, synopsis, director = film
+  try:
+    conn = get_connection()
+  except Exception as exc:
+    logging.error("Database connection error during movie_details: %s", exc)
+    raise HTTPException(status_code=500, detail="Database connection error")
 
-    today = datetime.today().date()
-    end_date = today + timedelta(days=6)
+  try:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(
+        "SELECT id, title, poster_url, duration, release_date, synopsis, director FROM films WHERE id = %(movie_id)s",
+        {"movie_id": movie_id},
+      )
+      film = cur.fetchone()
+      if not film:
+        raise HTTPException(status_code=404, detail="Film not found")
 
-    # Récupérer tous les showtimes du film avec infos cinéma
-    cursor.execute(
-        """
-        SELECT c.id, c.name, c.address, c.latitude, c.longitude,
-               s.start_date, s.start_time, s.diffusion_version, s.reservation_url
+      cur.execute(
+        f"""
+        SELECT
+          c.id AS cinema_id,
+          c.name,
+          c.address,
+          c.lat,
+          c.lon,
+          {dist_expr} AS distance_km,
+          s.start_date,
+          s.start_time,
+          s.diffusion_version,
+          s.format,
+          s.reservation_url
         FROM showtimes s
-        JOIN cinemas c ON s.cinema_id = c.id
-        WHERE s.movie_id = %s
-        AND s.start_date BETWEEN %s AND %s
-        ORDER BY c.name, s.start_date, s.start_time
+        JOIN cinemas c ON c.id = s.cinema_id
+        WHERE s.movie_id = %(movie_id)s
+          AND c.lat IS NOT NULL
+          AND c.lon IS NOT NULL
+          AND s.start_date BETWEEN %(today)s AND %(end_date)s
+          AND {dist_expr} <= %(radius_km)s
+        ORDER BY distance_km ASC, s.start_date ASC, s.start_time ASC;
         """,
-        (movie_id, today, end_date)
-    )
-    rows = cursor.fetchall()
-
-    cinemas_dict = {}
-    for row in rows:
-        cinema_id, name, address, latitude, longitude, start_date, start_time, diffusion_version, reservation_url = row
-        dist = haversine(req.lat, req.lon, latitude, longitude)
-        if dist <= req.radius_km:
-            if cinema_id not in cinemas_dict:
-                cinemas_dict[cinema_id] = {
-                    "name": name,
-                    "address": address,
-                    "distance_km": dist,
-                    "showtimes": []
-                }
-            cinemas_dict[cinema_id]["showtimes"].append({
-                "start_date": start_date,
-                "start_time": start_time,
-                "diffusion_version": diffusion_version,
-                "reservation_url": reservation_url
-            })
-
-    cursor.close()
+        {
+          "movie_id": movie_id,
+          "center_lat": req.lat,
+          "center_lon": req.lon,
+          "radius_km": radius,
+          "today": today,
+          "end_date": end_date,
+        },
+      )
+      rows = cur.fetchall()
+  finally:
     conn.close()
 
-    # Return the film object directly, including the id
-    return {
-        "id": movie_id,
-        "title": title,
-        "poster_url": poster_url,
-        "duration": duration,
-        "release_date": release_date,
-        "synopsis": synopsis,
-        "director": director,
-        "cinemas": list(cinemas_dict.values())
-    }
-  
+  cinemas = {}
+  for row in rows:
+    cinema_id = row["cinema_id"]
+    cinema = cinemas.get(cinema_id)
+    if not cinema:
+      cinema = {
+        "id": cinema_id,
+        "name": row["name"],
+        "address": row.get("address"),
+        "lat": float(row["lat"]) if row.get("lat") is not None else None,
+        "lon": float(row["lon"]) if row.get("lon") is not None else None,
+        "distance_km": float(row["distance_km"]) if row.get("distance_km") is not None else None,
+        "showtimes": [],
+      }
+      cinemas[cinema_id] = cinema
+
+    cinema["showtimes"].append({
+      "start_date": row["start_date"].isoformat() if isinstance(row["start_date"], date) else row["start_date"],
+      "start_time": row["start_time"].isoformat() if hasattr(row["start_time"], "isoformat") else row["start_time"],
+      "diffusion_version": row.get("diffusion_version"),
+      "format": row.get("format"),
+      "reservation_url": row.get("reservation_url"),
+    })
+
+  return {
+    "id": film["id"],
+    "title": film["title"],
+    "poster_url": film.get("poster_url"),
+    "duration": film.get("duration"),
+    "release_date": film.get("release_date"),
+    "synopsis": film.get("synopsis"),
+    "director": film.get("director"),
+    "cinemas": list(cinemas.values()),
+  }
