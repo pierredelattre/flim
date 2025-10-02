@@ -492,6 +492,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="home">
+    <h1 class="text-3xl font-bold text-blue-600">Flim</h1>
     <div class="controls">
       <button
         v-if="activeFilter.mode !== 'all'"
