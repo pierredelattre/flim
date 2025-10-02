@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, model_validator
+import unicodedata
 
 load_dotenv()
 
@@ -47,6 +48,16 @@ def distance_sql(lat_expr: str, lon_expr: str) -> str:
       )
     )
   """
+
+# --- Accent-stripping helper for fallback LIKE matching ---
+def _strip_accents(text: str) -> str:
+  """Return a lowercase, accent-stripped version of text (for fallback LIKE)."""
+  if not isinstance(text, str):
+    return text
+  # Normalize then remove combining marks
+  normalized = unicodedata.normalize("NFD", text)
+  no_accents = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+  return no_accents.lower()
 
 
 class MoviesNearbyRequest(BaseModel):
@@ -104,6 +115,7 @@ def ensure_search_schema() -> None:
   try:
     conn.autocommit = True
     with conn.cursor() as cur:
+      cur.execute("CREATE EXTENSION IF NOT EXISTS unaccent;")
       cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
       cur.execute(
         """
@@ -150,8 +162,10 @@ def search_suggest(q: str = Query(..., min_length=1), limit: int = Query(10, ge=
   if not query_text:
     return {"suggestions": []}
 
+  # SQL pattern (keeps wildcards) and normalized fallback (accent-stripped, lowercase)
   pattern = "%" + query_text.replace("%", "\\%").replace("_", "\\_") + "%"
-  params = {"pattern": pattern}
+  pattern_norm = "%" + _strip_accents(query_text).replace("%", "").replace("_", "") + "%"
+  params = {"pattern": pattern, "pattern_norm": pattern_norm, "limit": limit}
 
   try:
     conn = get_connection()
@@ -164,34 +178,45 @@ def search_suggest(q: str = Query(..., min_length=1), limit: int = Query(10, ge=
   cities: List[dict] = []
 
   try:
+    # --- FILMS ---
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       cur.execute(
         """
-        SELECT id, title, COALESCE(NULLIF(original_title, ''), '') AS original_title
+        SELECT id,
+               title,
+               COALESCE(NULLIF(original_title, ''), '') AS original_title
         FROM films
-        WHERE title ILIKE %(pattern)s ESCAPE '\\'
-           OR original_title ILIKE %(pattern)s ESCAPE '\\'
+        WHERE
+          -- accent-insensitive match
+          unaccent(lower(title)) LIKE unaccent(lower(%(pattern)s))
+          OR unaccent(lower(COALESCE(original_title, ''))) LIKE unaccent(lower(%(pattern)s))
+          -- fallback: python-normalized text LIKE (for safety if extension unavailable on read replica)
+          OR lower(title) LIKE %(pattern_norm)s
+          OR lower(COALESCE(original_title, '')) LIKE %(pattern_norm)s
         ORDER BY title ASC
         LIMIT %(limit)s;
         """,
-        {**params, "limit": limit},
+        params,
       )
       films = cur.fetchall()
 
+    # --- CINEMAS ---
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       try:
         cur.execute(
-          """
+          f"""
           SELECT id,
                  name,
                  COALESCE(lat, latitude) AS lat,
                  COALESCE(lon, longitude) AS lon
           FROM cinemas
-          WHERE name ILIKE %(pattern)s ESCAPE '\\'
+          WHERE
+            unaccent(lower(name)) LIKE unaccent(lower(%(pattern)s))
+            OR lower(name) LIKE %(pattern_norm)s
           ORDER BY name ASC
           LIMIT %(limit)s;
           """,
-          {**params, "limit": limit},
+          params,
         )
         cinemas = cur.fetchall()
       except Exception as e:
@@ -200,28 +225,35 @@ def search_suggest(q: str = Query(..., min_length=1), limit: int = Query(10, ge=
           """
           SELECT id, name
           FROM cinemas
-          WHERE name ILIKE %(pattern)s ESCAPE '\\'
+          WHERE
+            unaccent(lower(name)) LIKE unaccent(lower(%(pattern)s))
+            OR lower(name) LIKE %(pattern_norm)s
           ORDER BY name ASC
           LIMIT %(limit)s;
           """,
-          {**params, "limit": limit},
+          params,
         )
         rows = cur.fetchall()
-        cinemas = []
-        for r in rows:
-          cinemas.append({"id": r["id"], "name": r["name"], "lat": None, "lon": None})
+        cinemas = [{"id": r["id"], "name": r["name"], "lat": None, "lon": None} for r in rows]
 
+    # --- CITIES ---
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       cur.execute(
         """
-        SELECT id, name, COALESCE(zipcode, '') AS zipcode, lat, lon
+        SELECT id,
+               name,
+               COALESCE(zipcode, '') AS zipcode,
+               lat,
+               lon
         FROM geo_cities
-        WHERE name ILIKE %(pattern)s ESCAPE '\\'
-           OR zipcode ILIKE %(pattern)s ESCAPE '\\'
+        WHERE
+          unaccent(lower(name)) LIKE unaccent(lower(%(pattern)s))
+          OR lower(name) LIKE %(pattern_norm)s
+          OR lower(COALESCE(zipcode, '')) LIKE %(pattern_norm)s
         ORDER BY name ASC
         LIMIT %(limit)s;
         """,
-        {**params, "limit": limit},
+        params,
       )
       cities = cur.fetchall()
   finally:
