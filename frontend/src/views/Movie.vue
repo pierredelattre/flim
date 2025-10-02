@@ -7,10 +7,22 @@ const route = useRoute();
 const movieId = route.params.id;
 
 const movie = ref(null);
+const fetchError = ref("");
 
-const { position, error, getPosition } = useGeolocation();
+const { position, error: geoError, getPosition } = useGeolocation();
+const readStoredRadius = () => {
+  if (typeof window === "undefined") {
+    return NaN;
+  }
+  const stored = window.localStorage.getItem("radius_km");
+  return stored !== null ? Number(stored) : NaN;
+};
+
+const storedRadius = readStoredRadius();
+const radiusKm = Number.isNaN(storedRadius) || storedRadius <= 0 ? 5 : storedRadius;
 
 onMounted(async () => {
+  fetchError.value = "";
   await getPosition();
 
   let attempts = 0;
@@ -40,23 +52,34 @@ onMounted(async () => {
   const body = {
     lat: lat,
     lon: lon,
-    radius_km: 5
+    radius_km: radiusKm
   };
 
-  const res = await fetch(`/api/movie/${movieId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const data = await res.json();
-  movie.value = data;
+  try {
+    const res = await fetch(`/api/movie/${movieId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const message = await res.text();
+      throw new Error(message || `Requête échouée (${res.status})`);
+    }
+    const data = await res.json();
+    movie.value = data;
+  } catch (err) {
+    console.error("Erreur fetch movie:", err);
+    fetchError.value = err instanceof Error ? err.message : "Erreur inconnue";
+  }
 });
 
 
 </script>
 
 <template>
-  <div v-if="movie">
+  <div v-if="geoError" style="color: red">{{ geoError }}</div>
+  <div v-else-if="fetchError" style="color: red">{{ fetchError }}</div>
+  <div v-else-if="movie">
     <h1>{{ movie.title }}</h1>
     <img :src="movie.poster_url" :alt="movie.title" />
     <p><strong>Durée :</strong> {{ movie.duration }} min</p>
