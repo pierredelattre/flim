@@ -80,6 +80,7 @@ const searchQuery = ref("");
 const isSuggestionsOpen = ref(false);
 const highlightIndex = ref(-1);
 const searchContainer = ref(null);
+const activeFilter = ref({ mode: "all", label: "" });
 const typeLabels = {
   film: "FILM",
   cinema: "CINÉMA",
@@ -295,6 +296,17 @@ const applySearchCenter = (lat, lon) => {
   }
 };
 
+const resetToAll = async () => {
+  // Clear UI state
+  searchQuery.value = "";
+  closeSuggestions();
+  activeFilter.value = { mode: "all", label: "" };
+  lastSearchCenter.value = null;
+
+  // Re-fetch around current geolocated position
+  await fetchMovies({ forceGeolocate: true });
+};
+
 const fetchMovies = async (options = {}) => {
   loading.value = true;
   fetchError.value = "";
@@ -348,6 +360,7 @@ const selectSuggestion = async (suggestion) => {
   closeSuggestions();
   suppressNextSuggestionFetch = true;
   searchQuery.value = suggestion.label;
+  activeFilter.value = { mode: suggestion.type, label: suggestion.label };
 
   if (suggestion.type === "film") {
     await fetchMovies({ movieId: Number(suggestion.id) });
@@ -461,6 +474,14 @@ onBeforeUnmount(() => {
 
       <button @click="fetchNearbyMovies" :disabled="loading">
         {{ loading ? "Chargement..." : "Autour de moi" }}
+      </button>
+      <button
+        v-if="activeFilter.mode !== 'all'"
+        @click="resetToAll"
+        :disabled="loading"
+        title="Revenir à la vue initiale (tous les films et cinémas autour de moi)"
+      >
+        ← Retour
       </button>
 
       <label class="radius">
