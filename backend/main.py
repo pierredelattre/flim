@@ -34,15 +34,15 @@ def get_connection() -> psycopg2.extensions.connection:
   return psycopg2.connect(DATABASE_URL)
 
 
-def distance_sql(prefix: str = "c") -> str:
+def distance_sql(lat_expr: str, lon_expr: str) -> str:
   return f"""
     2 * 6371 * ASIN(
       SQRT(
         LEAST(
           1.0,
-          POWER(SIN(RADIANS({prefix}.lat - %(center_lat)s) / 2), 2) +
-          COS(RADIANS(%(center_lat)s)) * COS(RADIANS({prefix}.lat)) *
-          POWER(SIN(RADIANS({prefix}.lon - %(center_lon)s) / 2), 2)
+          POWER(SIN(RADIANS({lat_expr} - %(center_lat)s) / 2), 2) +
+          COS(RADIANS(%(center_lat)s)) * COS(RADIANS({lat_expr})) *
+          POWER(SIN(RADIANS({lon_expr} - %(center_lon)s) / 2), 2)
         )
       )
     )
@@ -179,17 +179,37 @@ def search_suggest(q: str = Query(..., min_length=1), limit: int = Query(10, ge=
       films = cur.fetchall()
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-      cur.execute(
-        """
-        SELECT id, name, lat, lon
-        FROM cinemas
-        WHERE name ILIKE %(pattern)s ESCAPE '\\'
-        ORDER BY name ASC
-        LIMIT %(limit)s;
-        """,
-        {**params, "limit": limit},
-      )
-      cinemas = cur.fetchall()
+      try:
+        cur.execute(
+          """
+          SELECT id,
+                 name,
+                 COALESCE(lat, latitude) AS lat,
+                 COALESCE(lon, longitude) AS lon
+          FROM cinemas
+          WHERE name ILIKE %(pattern)s ESCAPE '\\'
+          ORDER BY name ASC
+          LIMIT %(limit)s;
+          """,
+          {**params, "limit": limit},
+        )
+        cinemas = cur.fetchall()
+      except Exception as e:
+        logging.warning("Cinemas query without lat/lon fallback due to schema mismatch: %s", e)
+        cur.execute(
+          """
+          SELECT id, name
+          FROM cinemas
+          WHERE name ILIKE %(pattern)s ESCAPE '\\'
+          ORDER BY name ASC
+          LIMIT %(limit)s;
+          """,
+          {**params, "limit": limit},
+        )
+        rows = cur.fetchall()
+        cinemas = []
+        for r in rows:
+          cinemas.append({"id": r["id"], "name": r["name"], "lat": None, "lon": None})
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       cur.execute(
@@ -266,15 +286,16 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
   if center_lat is None or center_lon is None:
     raise HTTPException(status_code=400, detail="Missing coordinates")
 
-  dist_expr = distance_sql("c")
-  today = date.today()
+  cinema_lat_expr = "COALESCE(c.lat, c.latitude)"
+  cinema_lon_expr = "COALESCE(c.lon, c.longitude)"
+  dist_expr = distance_sql(cinema_lat_expr, cinema_lon_expr)
 
-  where_clauses = ["c.lat IS NOT NULL", "c.lon IS NOT NULL", "s.start_date >= %(today)s"]
+  where_clauses = [f"{cinema_lat_expr} IS NOT NULL", f"{cinema_lon_expr} IS NOT NULL", "s.start_date >= %(today)s"]
   params = {
     "center_lat": center_lat,
     "center_lon": center_lon,
     "radius_km": radius,
-    "today": today,
+    "today": date.today(),
   }
 
   if req.movie_id is not None:
@@ -299,8 +320,8 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
       c.id AS cinema_id,
       c.name AS cinema_name,
       c.address,
-      c.lat,
-      c.lon,
+      {cinema_lat_expr} AS lat,
+      {cinema_lon_expr} AS lon,
       {dist_expr} AS distance_km,
       s.start_date,
       s.start_time,
@@ -380,7 +401,9 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
 @app.post("/api/movie/{movie_id}")
 def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
   radius = req.radius_km if req.radius_km and req.radius_km > 0 else 5
-  dist_expr = distance_sql("c")
+  cinema_lat_expr = "COALESCE(c.lat, c.latitude)"
+  cinema_lon_expr = "COALESCE(c.lon, c.longitude)"
+  dist_expr = distance_sql(cinema_lat_expr, cinema_lon_expr)
   today = date.today()
   end_date = today + timedelta(days=6)
 
@@ -406,8 +429,8 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
           c.id AS cinema_id,
           c.name,
           c.address,
-          c.lat,
-          c.lon,
+          {cinema_lat_expr} AS lat,
+          {cinema_lon_expr} AS lon,
           {dist_expr} AS distance_km,
           s.start_date,
           s.start_time,
@@ -417,8 +440,8 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
         FROM showtimes s
         JOIN cinemas c ON c.id = s.cinema_id
         WHERE s.movie_id = %(movie_id)s
-          AND c.lat IS NOT NULL
-          AND c.lon IS NOT NULL
+          AND {cinema_lat_expr} IS NOT NULL
+          AND {cinema_lon_expr} IS NOT NULL
           AND s.start_date BETWEEN %(today)s AND %(end_date)s
           AND {dist_expr} <= %(radius_km)s
         ORDER BY distance_km ASC, s.start_date ASC, s.start_time ASC;
