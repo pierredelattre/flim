@@ -15,6 +15,12 @@ import DurationSelector from "@/components/filters/DurationSelector.vue";
 import SortBySelector from "@/components/filters/SortBySelector.vue";
 import { GENRES_OPTIONS, SUBTITLES_OPTIONS } from "@/constants/filterOptions.js";
 import { loadFilterOptions } from "@/utils/filterOptions.js";
+import {
+  canonicalizeDiffusionVersion,
+  formatDiffusionVersion,
+  formatLanguages,
+  normalizeLanguagesArray,
+} from "@/utils/formatters.js";
 
 const route = useRoute();
 const movieId = Number(route.params.id);
@@ -119,8 +125,22 @@ const handleRadiusUpdate = (value) => {
 };
 const filterDate = ref(readStoredString("filters_date"));
 const filterGenres = ref(readStoredArray("filters_genres"));
-const filterLanguages = ref(readStoredArray("filters_languages"));
-const filterSubtitles = ref(readStoredArray("filters_subtitles").map((item) => String(item).toUpperCase()));
+const filterLanguages = ref(
+  Array.from(
+    new Set(
+      readStoredArray("filters_languages").flatMap((item) => normalizeLanguagesArray(item))
+    )
+  )
+);
+const filterSubtitles = ref(
+  Array.from(
+    new Set(
+      readStoredArray("filters_subtitles")
+        .map((item) => canonicalizeDiffusionVersion(item))
+        .filter((item) => !!item)
+    )
+  )
+);
 const storedDurationMax = readStoredNumber("filters_duration_max_minutes");
 const filterDurationMax = ref(Number.isNaN(storedDurationMax) ? null : storedDurationMax);
 const filterSortBy = ref(readStoredString("filters_sort_by") || "relevance");
@@ -151,7 +171,7 @@ const toStringArray = (value) => {
 };
 
 const extractMovieGenres = (movieValue) => toStringArray(movieValue?.genres ?? movieValue?.genre);
-const extractMovieLanguages = (movieValue) => toStringArray(movieValue?.languages ?? movieValue?.language);
+const extractMovieLanguages = (movieValue) => normalizeLanguagesArray(movieValue?.languages ?? movieValue?.language);
 
 // ---------- Position wait loop ----------
 const waitForPosition = async () => {
@@ -324,7 +344,11 @@ const handleLanguagesToggle = ({ id, checked }) => {
 };
 
 const handleSubtitlesToggle = ({ id, checked }) => {
-  toggleValueInList(filterSubtitles, String(id).toUpperCase(), checked);
+  const canonical = canonicalizeDiffusionVersion(id);
+  if (!canonical) {
+    return;
+  }
+  toggleValueInList(filterSubtitles, canonical, checked);
 };
 
 const handleDurationChange = (value) => {
@@ -366,7 +390,11 @@ const filteredMovie = computed(() => {
 
   const nowRef = new Date();
   const activeDate = filterDate.value;
-  const activeSubtitles = new Set(filterSubtitles.value.map((s) => s.toUpperCase()));
+  const activeSubtitles = new Set(
+    filterSubtitles.value
+      .map((s) => canonicalizeDiffusionVersion(s))
+      .filter((s) => !!s)
+  );
   const hasSubtitlesFilter = activeSubtitles.size > 0;
   const durationMax = typeof filterDurationMax.value === "number" ? filterDurationMax.value : null;
   const activeGenres = filterGenres.value.map((g) => g.toLowerCase());
@@ -417,7 +445,7 @@ const filteredMovie = computed(() => {
         showtimes = showtimes.filter((show) => show?.start_date === activeDate);
       }
       if (hasSubtitlesFilter) {
-        showtimes = showtimes.filter((show) => activeSubtitles.has(String(show?.diffusion_version || "").toUpperCase()));
+        showtimes = showtimes.filter((show) => activeSubtitles.has(canonicalizeDiffusionVersion(show?.diffusion_version)));
       }
 
       if (!showtimes.length) {
@@ -525,20 +553,14 @@ const subtitleCounts = computed(() => {
   }
   for (const cinema of current.cinemas || []) {
     for (const show of cinema.showtimes || []) {
-      const code = String(show?.diffusion_version || "").trim().toUpperCase();
-      if (Object.prototype.hasOwnProperty.call(counts, code)) {
-        counts[code] += 1;
+      const canonical = canonicalizeDiffusionVersion(show?.diffusion_version);
+      if (canonical && Object.prototype.hasOwnProperty.call(counts, canonical)) {
+        counts[canonical] += 1;
       }
     }
   }
   return counts;
 });
-
-const subtitleLabels = {
-  ORIGINAL: "Original",
-  LOCAL: "Local",
-  DUBBED: "Doublé",
-};
 
 const genreItems = computed(() =>
   allGenres.value.map((genre) => ({
@@ -552,7 +574,7 @@ const genreItems = computed(() =>
 const languageItems = computed(() =>
   allLanguages.value.map((language) => ({
     id: language,
-    label: language,
+    label: formatLanguages(language),
     checked: filterLanguages.value.includes(language),
     count: languageCounts.value[language] ?? 0,
   }))
@@ -561,7 +583,7 @@ const languageItems = computed(() =>
 const subtitleItems = computed(() =>
   allSubtitles.value.map((code) => ({
     id: code,
-    label: subtitleLabels[code] || code,
+    label: formatDiffusionVersion(code) || code,
     checked: filterSubtitles.value.includes(code),
     count: subtitleCounts.value[code] ?? 0,
   }))
@@ -593,8 +615,8 @@ const synchronizeSelectionsWithOptions = () => {
 
   const normalizedSubtitles = filterSubtitles.value
     .map((value) => {
-      const normalized = String(value).toUpperCase();
-      return allSubtitles.value.includes(normalized) ? normalized : null;
+      const canonical = canonicalizeDiffusionVersion(value);
+      return canonical && allSubtitles.value.includes(canonical) ? canonical : null;
     })
     .filter((value, index, array) => value && array.indexOf(value) === index);
   if (!arraysEqual(normalizedSubtitles, filterSubtitles.value)) {
@@ -614,17 +636,34 @@ const loadStaticFilterOptions = async () => {
   try {
     const options = await loadFilterOptions();
     const normalizedGenres = Array.from(new Set(options.genres.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-    const normalizedLanguages = Array.from(new Set(options.languages.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-    const normalizedSubtitles = Array.from(new Set(options.subtitles.map((value) => value.trim().toUpperCase()).filter(Boolean))).sort();
+
+    const languageSet = new Set();
+    const languagesSource = Array.isArray(options.languages) ? options.languages : [];
+    for (const entry of languagesSource) {
+      for (const value of normalizeLanguagesArray(entry)) {
+        languageSet.add(value);
+      }
+    }
+    const normalizedLanguages = Array.from(languageSet).sort((a, b) => a.localeCompare(b));
+
+    const subtitleSet = new Set();
+    const subtitlesSource = Array.isArray(options.subtitles) ? options.subtitles : SUBTITLES_OPTIONS;
+    for (const entry of subtitlesSource) {
+      const canonical = canonicalizeDiffusionVersion(entry);
+      if (canonical) {
+        subtitleSet.add(canonical);
+      }
+    }
+    const normalizedSubtitles = Array.from(subtitleSet).sort();
 
     allGenres.value = normalizedGenres.length ? normalizedGenres : [...GENRES_OPTIONS];
     allLanguages.value = normalizedLanguages;
-    allSubtitles.value = normalizedSubtitles.length ? normalizedSubtitles : [...SUBTITLES_OPTIONS].map((value) => value.trim().toUpperCase()).filter(Boolean).sort();
+    allSubtitles.value = normalizedSubtitles.length ? normalizedSubtitles : [...SUBTITLES_OPTIONS];
   } catch (error) {
     console.error("Impossible de charger les options de filtres, utilisation des valeurs par défaut:", error);
     allGenres.value = [...GENRES_OPTIONS];
     allLanguages.value = [];
-    allSubtitles.value = [...SUBTITLES_OPTIONS].map((value) => value.trim().toUpperCase()).filter(Boolean).sort();
+    allSubtitles.value = [...SUBTITLES_OPTIONS];
   } finally {
     synchronizeSelectionsWithOptions();
   }
@@ -847,6 +886,7 @@ onBeforeUnmount(() => {
         :duration="movie.duration"
         :director="movie.director"
         :synopsis="movie.synopsis"
+        :languages="movie.languages ?? movie.language"
       />
 
       <h2>Séances</h2>

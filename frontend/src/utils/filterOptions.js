@@ -1,4 +1,5 @@
 import { GENRES_OPTIONS, SUBTITLES_OPTIONS } from "@/constants/filterOptions.js";
+import { canonicalizeDiffusionVersion, normalizeLanguagesArray } from "@/utils/formatters.js";
 
 let cachedOptions;
 let pendingRequest;
@@ -26,18 +27,32 @@ export const loadFilterOptions = async () => {
       }
       const payload = await response.json();
       const genres = Array.isArray(payload?.genres) && payload.genres.length ? payload.genres : GENRES_OPTIONS;
-      const languages = Array.isArray(payload?.languages)
-        ? payload.languages.filter((entry) => typeof entry === "string" && entry.trim())
+      const languagesInput = Array.isArray(payload?.languages)
+        ? payload.languages
         : [];
-      const subtitles =
-        Array.isArray(payload?.subtitles) && payload.subtitles.length
-          ? payload.subtitles.map((entry) => String(entry).trim().toUpperCase())
-          : SUBTITLES_OPTIONS;
+      const subtitlesInput = Array.isArray(payload?.subtitles) && payload.subtitles.length
+        ? payload.subtitles
+        : SUBTITLES_OPTIONS;
+
+      const normalizedLanguageSet = new Set();
+      for (const entry of languagesInput) {
+        for (const value of normalizeLanguagesArray(entry)) {
+          normalizedLanguageSet.add(value);
+        }
+      }
+
+      const normalizedSubtitleSet = new Set();
+      for (const entry of subtitlesInput) {
+        const canonical = canonicalizeDiffusionVersion(entry);
+        if (canonical) {
+          normalizedSubtitleSet.add(canonical);
+        }
+      }
 
       const normalized = {
         genres: [...genres].map((g) => g.trim()).filter(Boolean),
-        languages: [...languages].map((lang) => lang.trim()).filter(Boolean),
-        subtitles: [...subtitles].map((code) => code.trim().toUpperCase()).filter(Boolean),
+        languages: Array.from(normalizedLanguageSet).sort((a, b) => a.localeCompare(b)),
+        subtitles: Array.from(normalizedSubtitleSet).sort(),
       };
       cachedOptions = normalized;
       return cachedOptions;

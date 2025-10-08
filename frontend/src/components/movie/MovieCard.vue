@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import CinemaBlock from "@/components/movie/CinemaBlock.vue";
+import { formatLanguages } from "@/utils/formatters.js";
 
 const props = defineProps({
   movie: {
@@ -10,6 +11,7 @@ const props = defineProps({
 });
 
 const hasId = computed(() => typeof props.movie?.id === "number" || typeof props.movie?.id === "string");
+const formattedLanguages = computed(() => formatLanguages(props.movie?.languages ?? props.movie?.language));
 </script>
 
 <template>
@@ -38,6 +40,8 @@ const hasId = computed(() => typeof props.movie?.id === "number" || typeof props
         Voir toutes les séances
       </button>
     </div>
+
+    <p v-if="formattedLanguages"><strong>Langues :</strong> {{ formattedLanguages }}</p>
 
     <div class="cinemas">
       <CinemaBlock

@@ -31,7 +31,7 @@ const computedMaxHeight = computed(() => {
     return props.maxHeight;
   }
   const items = Number.isFinite(props.maxVisibleItems) && props.maxVisibleItems > 0 ? props.maxVisibleItems : 10;
-  const lineHeightRem = 2.2;
+  const lineHeightRem = 2;
   return `${(items * lineHeightRem).toFixed(2)}rem`;
 });
 </script>
@@ -45,10 +45,11 @@ const computedMaxHeight = computed(() => {
       role="listbox"
       :style="{ maxHeight: computedMaxHeight }"
       tabindex="0"
+      aria-multiselectable="true"
       @wheel.stop
     >
       <ul>
-        <li v-for="item in items" :key="item.id">
+        <li v-for="item in items" :key="item.id" role="option" :aria-selected="item.checked ? 'true' : 'false'">
           <label>
             <input
               type="checkbox"

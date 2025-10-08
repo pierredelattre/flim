@@ -28,14 +28,13 @@ const dropdownId = `filter-dropdown-${props.dropdownKey}`;
 const isOpen = computed(() => filterContext.openKey.value === props.dropdownKey);
 
 const panelRef = ref(null);
-const contentRef = ref(null);
 
 const computedMaxHeight = computed(() => {
   if (props.maxHeight) {
     return props.maxHeight;
   }
   const items = Number.isFinite(props.maxVisibleItems) && props.maxVisibleItems > 0 ? props.maxVisibleItems : 10;
-  const lineHeightRem = 2.2;
+  const lineHeightRem = 2;
   return `${(items * lineHeightRem).toFixed(2)}rem`;
 });
 
@@ -113,7 +112,6 @@ onBeforeUnmount(() => {
     tabindex="-1"
   >
     <div
-      ref="contentRef"
       class="filter-dropdown__content"
       :style="{ maxHeight: computedMaxHeight }"
       role="presentation"

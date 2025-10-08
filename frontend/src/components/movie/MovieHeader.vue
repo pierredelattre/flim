@@ -1,4 +1,7 @@
 <script setup>
+import { computed } from "vue";
+import { formatLanguages } from "@/utils/formatters.js";
+
 const props = defineProps({
   title: {
     type: String,
@@ -20,7 +23,13 @@ const props = defineProps({
     type: String,
     default: "",
   },
+  languages: {
+    type: [String, Array],
+    default: "",
+  },
 });
+
+const formattedLanguages = computed(() => formatLanguages(props.languages));
 </script>
 
 <template>
@@ -33,6 +42,7 @@ const props = defineProps({
       class="poster"
     />
     <p><strong>Durée :</strong> {{ duration ?? "?" }} min</p>
+    <p v-if="formattedLanguages"><strong>Langues :</strong> {{ formattedLanguages }}</p>
     <p><strong>Réalisateur :</strong> {{ director ?? "—" }}</p>
     <p><strong>Synopsis :</strong> {{ synopsis ?? "—" }}</p>
   </header>

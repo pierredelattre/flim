@@ -51,4 +51,4 @@ export const GENRES_OPTIONS = [
   "Cinéma engagé",
 ];
 
-export const SUBTITLES_OPTIONS = ["ORIGINAL", "LOCAL", "DUBBED"];
+export const SUBTITLES_OPTIONS = ["ORIGINAL", "SUBS", "DUBBED"];
