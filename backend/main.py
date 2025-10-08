@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import date, datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import psycopg2
 from psycopg2 import sql
@@ -13,6 +13,61 @@ from pydantic import BaseModel, model_validator
 import unicodedata
 
 load_dotenv()
+
+GENRE_OPTIONS = [
+  "Action",
+  "Animation",
+  "Aventure",
+  "Biopic",
+  "Comédie",
+  "Comédie dramatique",
+  "Comédie musicale",
+  "Court métrage",
+  "Documentaire",
+  "Drame",
+  "Epouvante-Horreur",
+  "Espionnage",
+  "Famille",
+  "Fantastique",
+  "Guerre",
+  "Historique",
+  "Judiciaire",
+  "Musical",
+  "Policier",
+  "Romance",
+  "Science-fiction",
+  "Thriller",
+  "Western",
+  "Expérimental",
+  "Sport",
+  "Péplum",
+  "Arts martiaux",
+  "Road movie",
+  "Film noir",
+  "Super-héros",
+  "Satire",
+  "Fiction",
+  "Animation 3D",
+  "Drame psychologique",
+  "Film d’auteur",
+  "Film musical",
+  "Film politique",
+  "Drame social",
+  "Conte",
+  "Enquête",
+  "Adaptation littéraire",
+  "Mystère",
+  "Suspense",
+  "Animation japonaise",
+  "Animation jeunesse",
+  "Film historique",
+  "Dystopie",
+  "Chronique",
+  "Aventure humaine",
+  "Cinéma engagé",
+]
+
+SUBTITLE_OPTIONS = ["ORIGINAL", "LOCAL", "DUBBED"]
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -64,7 +119,14 @@ def split_to_list(value) -> List[str]:
   if value is None:
     return []
   if isinstance(value, list):
-    return [str(item).strip() for item in value if str(item).strip()]
+    result: List[str] = []
+    for item in value:
+      if item is None:
+        continue
+      text = str(item).strip()
+      if text:
+        result.append(text)
+    return result
   if isinstance(value, str):
     return [segment.strip() for segment in value.split(",") if segment.strip()]
   return []
@@ -205,6 +267,42 @@ def ensure_search_schema() -> None:
 @app.on_event("startup")
 def on_startup() -> None:
   ensure_search_schema()
+
+
+@app.get("/api/filters_options")
+def filters_options():
+  languages: Set[str] = set()
+  conn = None
+
+  try:
+    conn = get_connection()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+      cur.execute(
+        """
+        SELECT languages
+        FROM films
+        WHERE languages IS NOT NULL
+          AND TRIM(languages) <> ''
+        """
+      )
+      rows = cur.fetchall()
+      for row in rows:
+        for entry in split_to_list(row.get("languages")):
+          if entry:
+            languages.add(entry)
+  except Exception as exc:
+    logging.error("Error while retrieving filter options: %s", exc)
+  finally:
+    if conn is not None:
+      conn.close()
+
+  normalized_languages = sorted({lang.strip() for lang in languages if isinstance(lang, str) and lang.strip()}, key=lambda s: s.lower())
+
+  return {
+    "genres": GENRE_OPTIONS,
+    "languages": normalized_languages,
+    "subtitles": SUBTITLE_OPTIONS,
+  }
 
 
 @app.get("/api/search_suggest")
@@ -375,24 +473,6 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
   duration_max = req.duration_max_minutes if req.duration_max_minutes and req.duration_max_minutes > 0 else None
   languages_filter = [str(lang).strip().lower() for lang in (req.languages or []) if isinstance(lang, str) and str(lang).strip()]
   genres_filter = [str(genre).strip().lower() for genre in (req.genres or []) if isinstance(genre, str) and str(genre).strip()]
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
-  subtitles_set = set(subtitles_filter)
-  languages_filter_set = set(languages_filter)
-  genres_filter_set = set(genres_filter)
   subtitles_set = set(subtitles_filter)
   languages_filter_set = set(languages_filter)
   genres_filter_set = set(genres_filter)

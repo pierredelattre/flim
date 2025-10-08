@@ -7,6 +7,14 @@ const props = defineProps({
     type: String,
     required: true,
   },
+  maxVisibleItems: {
+    type: Number,
+    default: 10,
+  },
+  maxHeight: {
+    type: String,
+    default: null,
+  },
 });
 
 const filterContext = inject(filterBarContextKey);
@@ -20,6 +28,16 @@ const dropdownId = `filter-dropdown-${props.dropdownKey}`;
 const isOpen = computed(() => filterContext.openKey.value === props.dropdownKey);
 
 const panelRef = ref(null);
+const contentRef = ref(null);
+
+const computedMaxHeight = computed(() => {
+  if (props.maxHeight) {
+    return props.maxHeight;
+  }
+  const items = Number.isFinite(props.maxVisibleItems) && props.maxVisibleItems > 0 ? props.maxVisibleItems : 10;
+  const lineHeightRem = 2.2;
+  return `${(items * lineHeightRem).toFixed(2)}rem`;
+});
 
 const focusFirstElement = () => {
   const el = panelRef.value;
@@ -94,7 +112,15 @@ onBeforeUnmount(() => {
     :aria-labelledby="`filter-trigger-${dropdownKey}`"
     tabindex="-1"
   >
-    <slot />
+    <div
+      ref="contentRef"
+      class="filter-dropdown__content"
+      :style="{ maxHeight: computedMaxHeight }"
+      role="presentation"
+      @wheel.stop
+    >
+      <slot />
+    </div>
   </div>
 </template>
 
@@ -115,5 +141,19 @@ onBeforeUnmount(() => {
 
 .filter-dropdown:focus {
   outline: none;
+}
+
+.filter-dropdown__content {
+  max-height: 20rem;
+  scrollbar-gutter: stable;
+}
+
+.filter-dropdown__content::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+.filter-dropdown__content::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.4);
+  border-radius: 9999px;
 }
 </style>

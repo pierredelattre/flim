@@ -13,6 +13,8 @@ import DatePickerNative from "@/components/filters/DatePickerNative.vue";
 import DurationSelector from "@/components/filters/DurationSelector.vue";
 import SortBySelector from "@/components/filters/SortBySelector.vue";
 import RadiusSelector from "@/components/controls/RadiusSelector.vue";
+import { GENRES_OPTIONS, SUBTITLES_OPTIONS } from "@/constants/filterOptions.js";
+import { loadFilterOptions } from "@/utils/filterOptions.js";
 
 const { position, error: geoError, getPosition } = useGeolocation();
 
@@ -165,6 +167,9 @@ const storedDurationMax = readStoredNumber("filters_duration_max_minutes");
 const filterDurationMax = ref(Number.isNaN(storedDurationMax) ? null : storedDurationMax);
 const filterSortBy = ref(readStoredString("filters_sort_by") || "relevance");
 const openDropdownKey = ref(null);
+const allGenres = ref([...GENRES_OPTIONS]);
+const allLanguages = ref([]);
+const allSubtitles = ref([...SUBTITLES_OPTIONS]);
 const sortLabelMap = {
   distance: "Distance",
   earliest_showtime: "Première séance",
@@ -199,6 +204,8 @@ watch(radiusKm, (next, previous) => {
   scheduleDataRefresh();
 });
 
+let suppressFilterWatcher = false;
+
 watch(filterDate, (value) => {
   if (value) {
     persistString("filters_date", value);
@@ -209,21 +216,33 @@ watch(filterDate, (value) => {
 });
 
 watch(filterGenres, (value) => {
+  if (suppressFilterWatcher) {
+    return;
+  }
   persistArray("filters_genres", value);
   scheduleDataRefresh();
 }, { deep: true });
 
 watch(filterLanguages, (value) => {
+  if (suppressFilterWatcher) {
+    return;
+  }
   persistArray("filters_languages", value);
   scheduleDataRefresh();
 }, { deep: true });
 
 watch(filterSubtitles, (value) => {
+  if (suppressFilterWatcher) {
+    return;
+  }
   persistArray("filters_subtitles", value);
   scheduleDataRefresh();
 }, { deep: true });
 
 watch(filterDurationMax, (value) => {
+  if (suppressFilterWatcher) {
+    return;
+  }
   if (typeof value === "number") {
     persistNumber("filters_duration_max_minutes", value);
   } else {
@@ -233,6 +252,9 @@ watch(filterDurationMax, (value) => {
 });
 
 watch(filterSortBy, (value) => {
+  if (suppressFilterWatcher) {
+    return;
+  }
   if (value && value !== "relevance") {
     persistString("filters_sort_by", value);
   } else {
@@ -244,53 +266,82 @@ watch(filterSortBy, (value) => {
 // --- Time helpers to hide past showtimes ---
 const now = ref(new Date());
 let nowTimerId;
-const availableGenres = computed(() => {
-  const set = new Set();
-  for (const movie of moviesNearby.value || []) {
-    for (const genre of extractMovieGenres(movie)) {
-      set.add(genre);
-    }
+const genreLookup = computed(() => {
+  const map = new Map();
+  for (const label of allGenres.value) {
+    map.set(label.toLowerCase(), label);
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
+  return map;
 });
 
-const availableLanguages = computed(() => {
-  const set = new Set();
-  for (const movie of moviesNearby.value || []) {
-    for (const language of extractMovieLanguages(movie)) {
-      set.add(language);
-    }
+const languageLookup = computed(() => {
+  const map = new Map();
+  for (const label of allLanguages.value) {
+    map.set(label.toLowerCase(), label);
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b));
+  return map;
 });
 
-const availableSubtitles = computed(() => {
-  const set = new Set();
-  for (const movie of moviesNearby.value || []) {
-    for (const cinema of movie?.cinemas || []) {
-      for (const show of cinema?.showtimes || []) {
-        if (typeof show?.diffusion_version === "string" && show.diffusion_version.trim()) {
-          set.add(show.diffusion_version.trim().toUpperCase());
+const genreCounts = computed(() => {
+  const counts = Object.fromEntries(allGenres.value.map((genre) => [genre, 0]));
+  for (const movie of upcomingMovies.value) {
+    const seenForMovie = new Set();
+    for (const rawGenre of extractMovieGenres(movie)) {
+      const canonical = genreLookup.value.get(String(rawGenre).toLowerCase());
+      if (canonical && !seenForMovie.has(canonical)) {
+        counts[canonical] = (counts[canonical] ?? 0) + 1;
+        seenForMovie.add(canonical);
+      }
+    }
+  }
+  return counts;
+});
+
+const languageCounts = computed(() => {
+  const counts = Object.fromEntries(allLanguages.value.map((language) => [language, 0]));
+  for (const movie of upcomingMovies.value) {
+    const seenForMovie = new Set();
+    for (const rawLanguage of extractMovieLanguages(movie)) {
+      const canonical = languageLookup.value.get(String(rawLanguage).toLowerCase());
+      if (canonical && !seenForMovie.has(canonical)) {
+        counts[canonical] = (counts[canonical] ?? 0) + 1;
+        seenForMovie.add(canonical);
+      }
+    }
+  }
+  return counts;
+});
+
+const subtitleCounts = computed(() => {
+  const counts = Object.fromEntries(allSubtitles.value.map((code) => [code, 0]));
+  for (const movie of upcomingMovies.value) {
+    for (const cinema of movie.cinemas || []) {
+      for (const show of cinema.showtimes || []) {
+        const code = String(show?.diffusion_version || "").trim().toUpperCase();
+        if (Object.prototype.hasOwnProperty.call(counts, code)) {
+          counts[code] += 1;
         }
       }
     }
   }
-  return Array.from(set).sort();
+  return counts;
 });
 
 const genreItems = computed(() =>
-  availableGenres.value.map((genre) => ({
+  allGenres.value.map((genre) => ({
     id: genre,
     label: genre,
     checked: filterGenres.value.includes(genre),
+    count: genreCounts.value[genre] ?? 0,
   }))
 );
 
 const languageItems = computed(() =>
-  availableLanguages.value.map((language) => ({
+  allLanguages.value.map((language) => ({
     id: language,
     label: language,
     checked: filterLanguages.value.includes(language),
+    count: languageCounts.value[language] ?? 0,
   }))
 );
 
@@ -301,12 +352,76 @@ const subtitleLabels = {
 };
 
 const subtitleItems = computed(() =>
-  availableSubtitles.value.map((code) => ({
+  allSubtitles.value.map((code) => ({
     id: code,
     label: subtitleLabels[code] || code,
     checked: filterSubtitles.value.includes(code),
+    count: subtitleCounts.value[code] ?? 0,
   }))
 );
+
+const arraysEqual = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
+
+const synchronizeSelectionsWithOptions = () => {
+  suppressFilterWatcher = true;
+  let changed = false;
+
+  const normalizedGenres = filterGenres.value
+    .map((value) => genreLookup.value.get(String(value).toLowerCase()))
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+  if (!arraysEqual(normalizedGenres, filterGenres.value)) {
+    filterGenres.value = normalizedGenres;
+    persistArray("filters_genres", filterGenres.value);
+    changed = true;
+  }
+
+  const normalizedLanguages = filterLanguages.value
+    .map((value) => languageLookup.value.get(String(value).toLowerCase()))
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+  if (!arraysEqual(normalizedLanguages, filterLanguages.value)) {
+    filterLanguages.value = normalizedLanguages;
+    persistArray("filters_languages", filterLanguages.value);
+    changed = true;
+  }
+
+  const normalizedSubtitles = filterSubtitles.value
+    .map((value) => {
+      const normalized = String(value).toUpperCase();
+      return allSubtitles.value.includes(normalized) ? normalized : null;
+    })
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+  if (!arraysEqual(normalizedSubtitles, filterSubtitles.value)) {
+    filterSubtitles.value = normalizedSubtitles;
+    persistArray("filters_subtitles", filterSubtitles.value);
+    changed = true;
+  }
+
+  suppressFilterWatcher = false;
+
+  if (changed) {
+    scheduleDataRefresh();
+  }
+};
+
+const loadStaticFilterOptions = async () => {
+  try {
+    const options = await loadFilterOptions();
+    const normalizedGenres = Array.from(new Set(options.genres.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const normalizedLanguages = Array.from(new Set(options.languages.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    const normalizedSubtitles = Array.from(new Set(options.subtitles.map((value) => value.trim().toUpperCase()).filter(Boolean))).sort();
+
+    allGenres.value = normalizedGenres.length ? normalizedGenres : [...GENRES_OPTIONS];
+    allLanguages.value = normalizedLanguages;
+    allSubtitles.value = normalizedSubtitles.length ? normalizedSubtitles : [...SUBTITLES_OPTIONS].map((value) => value.trim().toUpperCase()).filter(Boolean).sort();
+  } catch (error) {
+    console.error("Impossible de charger les options de filtres, utilisation des valeurs par défaut:", error);
+    allGenres.value = [...GENRES_OPTIONS];
+    allLanguages.value = [];
+    allSubtitles.value = [...SUBTITLES_OPTIONS].map((value) => value.trim().toUpperCase()).filter(Boolean).sort();
+  } finally {
+    synchronizeSelectionsWithOptions();
+  }
+};
 
 const selectedDateLabel = computed(() => (filterDate.value ? filterDate.value : ""));
 const selectedGenresLabel = computed(() => (filterGenres.value.length ? `${filterGenres.value.length}` : ""));
@@ -899,13 +1014,16 @@ const onSearchKeydown = (event) => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener("click", handleClickOutside);
   nowTimerId = setInterval(() => {
     now.value = new Date();
   }, 60_000);
+  await loadStaticFilterOptions();
   if (typeof currentPosition.value?.lat === "number" && typeof currentPosition.value?.lon === "number") {
-    fetchMovies();
+    if (!pendingFetchTimeoutId) {
+      fetchMovies();
+    }
   }
 });
 
@@ -987,11 +1105,12 @@ onBeforeUnmount(() => {
               <span v-if="selectedGenresLabel" class="filter-item__value">{{ selectedGenresLabel }}</span>
             </template>
           </FilterItem>
-          <FilterDropdown dropdownKey="genres">
+          <FilterDropdown dropdownKey="genres" :maxVisibleItems="15">
             <FilterCheckboxList
               groupLabel="Genres"
               :items="genreItems"
               @toggle="handleGenresToggle"
+              :maxVisibleItems="15"
             />
           </FilterDropdown>
         </div>
@@ -1013,6 +1132,7 @@ onBeforeUnmount(() => {
               groupLabel="Langues"
               :items="languageItems"
               @toggle="handleLanguagesToggle"
+              :maxVisibleItems="10"
             />
           </FilterDropdown>
         </div>
@@ -1029,11 +1149,12 @@ onBeforeUnmount(() => {
               <span v-if="selectedSubtitlesLabel" class="filter-item__value">{{ selectedSubtitlesLabel }}</span>
             </template>
           </FilterItem>
-          <FilterDropdown dropdownKey="subtitles">
+          <FilterDropdown dropdownKey="subtitles" :maxVisibleItems="5">
             <FilterCheckboxList
               groupLabel="Sous-titres"
               :items="subtitleItems"
               @toggle="handleSubtitlesToggle"
+              :maxVisibleItems="5"
             />
           </FilterDropdown>
         </div>
