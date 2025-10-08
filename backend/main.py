@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 import psycopg2
@@ -60,6 +60,45 @@ def _strip_accents(text: str) -> str:
   return no_accents.lower()
 
 
+def split_to_list(value) -> List[str]:
+  if value is None:
+    return []
+  if isinstance(value, list):
+    return [str(item).strip() for item in value if str(item).strip()]
+  if isinstance(value, str):
+    return [segment.strip() for segment in value.split(",") if segment.strip()]
+  return []
+
+
+def showtime_timestamp(start_date_value, start_time_value) -> Optional[float]:
+  try:
+    if isinstance(start_date_value, date):
+      day = start_date_value
+    elif isinstance(start_date_value, str):
+      day = date.fromisoformat(start_date_value)
+    else:
+      return None
+
+    if hasattr(start_time_value, "hour") and hasattr(start_time_value, "minute"):
+      hour = int(start_time_value.hour)
+      minute = int(start_time_value.minute)
+      second = int(getattr(start_time_value, "second", 0))
+    elif isinstance(start_time_value, str):
+      parts = start_time_value.split(":")
+      if len(parts) < 2:
+        return None
+      hour = int(parts[0])
+      minute = int(parts[1])
+      second = int(parts[2]) if len(parts) > 2 else 0
+    else:
+      return None
+
+    dt_value = datetime(day.year, day.month, day.day, hour, minute, second)
+    return dt_value.timestamp()
+  except Exception:
+    return None
+
+
 class MoviesNearbyRequest(BaseModel):
   lat: Optional[float] = None
   lon: Optional[float] = None
@@ -69,6 +108,12 @@ class MoviesNearbyRequest(BaseModel):
   override_location: bool = False
   center_lat: Optional[float] = None
   center_lon: Optional[float] = None
+  date: Optional[str] = None
+  genres: Optional[List[str]] = None
+  languages: Optional[List[str]] = None
+  subtitles: Optional[List[str]] = None
+  duration_max_minutes: Optional[int] = None
+  sort_by: Optional[str] = None
 
   @model_validator(mode="after")
   def ensure_coordinates(self):
@@ -102,6 +147,12 @@ class MovieDetailsRequest(BaseModel):
   lat: float
   lon: float
   radius_km: float = 5
+  date: Optional[str] = None
+  genres: Optional[List[str]] = None
+  languages: Optional[List[str]] = None
+  subtitles: Optional[List[str]] = None
+  duration_max_minutes: Optional[int] = None
+  sort_by: Optional[str] = None
 
 
 def ensure_search_schema() -> None:
@@ -308,6 +359,43 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
   radius = req.radius_km if req.radius_km and req.radius_km > 0 else 5
   center_lat = req.center_lat if req.override_location else req.lat
   center_lon = req.center_lon if req.override_location else req.lon
+  sort_options = {"relevance", "distance", "earliest_showtime", "title_asc", "duration_asc"}
+  sort_by = (req.sort_by or "relevance").lower()
+  if sort_by not in sort_options:
+    sort_by = "relevance"
+
+  filter_date = None
+  if req.date:
+    try:
+      filter_date = date.fromisoformat(req.date)
+    except ValueError:
+      logging.warning("Invalid date filter received: %s", req.date)
+
+  subtitles_filter = [str(sub).strip().upper() for sub in (req.subtitles or []) if isinstance(sub, str) and str(sub).strip()]
+  duration_max = req.duration_max_minutes if req.duration_max_minutes and req.duration_max_minutes > 0 else None
+  languages_filter = [str(lang).strip().lower() for lang in (req.languages or []) if isinstance(lang, str) and str(lang).strip()]
+  genres_filter = [str(genre).strip().lower() for genre in (req.genres or []) if isinstance(genre, str) and str(genre).strip()]
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
 
   # Extra guard in case NaN slips through
   if isinstance(center_lat, float) and center_lat != center_lat:
@@ -322,13 +410,35 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
   cinema_lon_expr = "COALESCE(c.lon, c.longitude)"
   dist_expr = distance_sql(cinema_lat_expr, cinema_lon_expr)
 
-  where_clauses = [f"{cinema_lat_expr} IS NOT NULL", f"{cinema_lon_expr} IS NOT NULL", "s.start_date >= %(today)s"]
+  where_clauses = [f"{cinema_lat_expr} IS NOT NULL", f"{cinema_lon_expr} IS NOT NULL"]
   params = {
     "center_lat": center_lat,
     "center_lon": center_lon,
     "radius_km": radius,
-    "today": date.today(),
   }
+
+  if filter_date:
+    where_clauses.append("s.start_date = %(filter_date)s")
+    params["filter_date"] = filter_date
+  else:
+    where_clauses.append("s.start_date >= %(today)s")
+    params["today"] = date.today()
+
+  if subtitles_filter:
+    where_clauses.append("UPPER(COALESCE(s.diffusion_version, '')) = ANY(%(subtitles)s)")
+    params["subtitles"] = subtitles_filter
+
+  if duration_max is not None:
+    where_clauses.append("(m.duration IS NULL OR m.duration <= %(duration_max)s)")
+    params["duration_max"] = duration_max
+
+  if languages_filter:
+    params["languages_like"] = [f"%{lang}%" for lang in languages_filter]
+    where_clauses.append("(m.languages IS NULL OR m.languages = '' OR LOWER(m.languages) LIKE ANY(%(languages_like)s))")
+
+  if genres_filter:
+    params["genres_like"] = [f"%{genre}%" for genre in genres_filter]
+    where_clauses.append("(m.genre IS NULL OR LOWER(m.genre) LIKE ANY(%(genres_like)s))")
 
   if req.movie_id is not None:
     where_clauses.append("s.movie_id = %(movie_id)s")
@@ -349,6 +459,8 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
       m.duration,
       m.release_date,
       m.synopsis,
+      m.genre,
+      m.languages,
       c.id AS cinema_id,
       c.name AS cinema_name,
       c.address,
@@ -385,6 +497,8 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
     film_id = row["film_id"]
     movie = movies.get(film_id)
     if not movie:
+      genres_list = split_to_list(row.get("genre"))
+      languages_list = split_to_list(row.get("languages"))
       movie = {
         "id": film_id,
         "title": row["title"],
@@ -393,6 +507,10 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
         "duration": row.get("duration"),
         "release_date": row.get("release_date"),
         "synopsis": row.get("synopsis"),
+        "genre": row.get("genre"),
+        "genres": genres_list,
+        "languages": languages_list,
+        "language": languages_list[0] if languages_list else None,
         "cinemas": [],
       }
       movies[film_id] = movie
@@ -419,12 +537,80 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
       "reservation_url": row.get("reservation_url"),
     })
 
+  subtitle_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+  processed_movies: List[dict] = []
+
+  for movie in movies.values():
+    movie_duration = movie.get("duration")
+    if duration_max is not None and isinstance(movie_duration, int) and movie_duration > duration_max:
+      continue
+
+    if languages_filter_set:
+      movie_languages = [lang.lower() for lang in (movie.get("languages") or [])]
+      if movie_languages and not languages_filter_set.intersection(movie_languages):
+        continue
+
+    if genres_filter_set:
+      movie_genres = [genre.lower() for genre in (movie.get("genres") or [])]
+      if movie_genres and not genres_filter_set.intersection(movie_genres):
+        continue
+
+    new_cinemas = []
+    min_distance = None
+    earliest_ts = None
+
+    for cinema in movie.get("cinemas", []):
+      showtimes = []
+      for show in cinema.get("showtimes", []):
+        if filter_date and show.get("start_date") != filter_date.isoformat():
+          continue
+        if subtitle_set:
+          subtitle_value = (show.get("diffusion_version") or "").strip().upper()
+          if subtitle_value not in subtitle_set:
+            continue
+        timestamp = showtime_timestamp(show.get("start_date"), show.get("start_time"))
+        if timestamp is not None:
+          if earliest_ts is None or timestamp < earliest_ts:
+            earliest_ts = timestamp
+        showtimes.append(show)
+
+      if not showtimes:
+        continue
+
+      distance_val = cinema.get("distance_km")
+      if isinstance(distance_val, (int, float)):
+        if min_distance is None or distance_val < min_distance:
+          min_distance = distance_val
+
+      cinema_copy = {**cinema, "showtimes": showtimes}
+      new_cinemas.append(cinema_copy)
+
+    if not new_cinemas:
+      continue
+
+    movie_copy = {**movie, "cinemas": new_cinemas, "_meta": {"min_distance": min_distance, "earliest_ts": earliest_ts}}
+    processed_movies.append(movie_copy)
+
+  if sort_by == "distance":
+    processed_movies.sort(key=lambda m: m["_meta"]["min_distance"] if m["_meta"]["min_distance"] is not None else float("inf"))
+  elif sort_by == "earliest_showtime":
+    processed_movies.sort(key=lambda m: m["_meta"]["earliest_ts"] if m["_meta"]["earliest_ts"] is not None else float("inf"))
+  elif sort_by == "title_asc":
+    processed_movies.sort(key=lambda m: (m.get("title") or "").lower())
+  elif sort_by == "duration_asc":
+    processed_movies.sort(key=lambda m: m.get("duration") if isinstance(m.get("duration"), int) else float("inf"))
+
+  for movie in processed_movies:
+    movie.pop("_meta", None)
+
   response_payload = {
     "success": True,
     "center_lat": center_lat,
     "center_lon": center_lon,
     "radius_km": radius,
-    "data": list(movies.values()),
+    "data": processed_movies,
   }
 
   return response_payload
@@ -436,8 +622,32 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
   cinema_lat_expr = "COALESCE(c.lat, c.latitude)"
   cinema_lon_expr = "COALESCE(c.lon, c.longitude)"
   dist_expr = distance_sql(cinema_lat_expr, cinema_lon_expr)
-  today = date.today()
-  end_date = today + timedelta(days=6)
+  sort_options = {"relevance", "distance", "earliest_showtime", "title_asc", "duration_asc"}
+  sort_by = (req.sort_by or "relevance").lower()
+  if sort_by not in sort_options:
+    sort_by = "relevance"
+
+  filter_date = None
+  if req.date:
+    try:
+      filter_date = date.fromisoformat(req.date)
+    except ValueError:
+      logging.warning("Invalid date filter received for movie %s: %s", movie_id, req.date)
+
+  subtitles_filter = [str(sub).strip().upper() for sub in (req.subtitles or []) if isinstance(sub, str) and str(sub).strip()]
+  duration_max = req.duration_max_minutes if req.duration_max_minutes and req.duration_max_minutes > 0 else None
+  languages_filter = [str(lang).strip().lower() for lang in (req.languages or []) if isinstance(lang, str) and str(lang).strip()]
+  genres_filter = [str(genre).strip().lower() for genre in (req.genres or []) if isinstance(genre, str) and str(genre).strip()]
+  subtitles_set = set(subtitles_filter)
+  languages_filter_set = set(languages_filter)
+  genres_filter_set = set(genres_filter)
+
+  if filter_date:
+    start_date = filter_date
+    end_date = filter_date
+  else:
+    start_date = date.today()
+    end_date = start_date + timedelta(days=6)
 
   try:
     conn = get_connection()
@@ -448,15 +658,18 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
   try:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       cur.execute(
-        "SELECT id, title, poster_url, duration, release_date, synopsis, director FROM films WHERE id = %(movie_id)s",
+        "SELECT id, title, poster_url, duration, release_date, synopsis, director, genre, languages FROM films WHERE id = %(movie_id)s",
         {"movie_id": movie_id},
       )
       film = cur.fetchone()
       if not film:
         raise HTTPException(status_code=404, detail="Film not found")
 
-      cur.execute(
-        f"""
+      extra_showtime_filters = ""
+      if subtitles_filter:
+        extra_showtime_filters += " AND UPPER(COALESCE(s.diffusion_version, '')) = ANY(%(subtitles)s)"
+
+      query = f"""
         SELECT
           c.id AS cinema_id,
           c.name,
@@ -474,25 +687,43 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
         WHERE s.movie_id = %(movie_id)s
           AND {cinema_lat_expr} IS NOT NULL
           AND {cinema_lon_expr} IS NOT NULL
-          AND s.start_date BETWEEN %(today)s AND %(end_date)s
+          AND s.start_date BETWEEN %(start_date)s AND %(end_date)s
           AND {dist_expr} <= %(radius_km)s
+          {extra_showtime_filters}
         ORDER BY distance_km ASC, s.start_date ASC, s.start_time ASC;
-        """,
-        {
-          "movie_id": movie_id,
-          "center_lat": req.lat,
-          "center_lon": req.lon,
-          "radius_km": radius,
-          "today": today,
-          "end_date": end_date,
-        },
-      )
+        """
+
+      params = {
+        "movie_id": movie_id,
+        "center_lat": req.lat,
+        "center_lon": req.lon,
+        "radius_km": radius,
+        "start_date": start_date,
+        "end_date": end_date,
+      }
+      if subtitles_filter:
+        params["subtitles"] = subtitles_filter
+
+      cur.execute(query, params)
       rows = cur.fetchall()
   finally:
     conn.close()
 
   cinemas = {}
   for row in rows:
+    if subtitles_set:
+      subtitle_value = (row.get("diffusion_version") or "").strip().upper()
+      if subtitle_value not in subtitles_set:
+        continue
+
+    if filter_date:
+      show_date = row.get("start_date")
+      if isinstance(show_date, date):
+        if show_date != filter_date:
+          continue
+      elif show_date != filter_date.isoformat():
+        continue
+
     cinema_id = row["cinema_id"]
     cinema = cinemas.get(cinema_id)
     if not cinema:
@@ -515,6 +746,40 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
       "reservation_url": row.get("reservation_url"),
     })
 
+  cinema_list = []
+  for cinema in cinemas.values():
+    if not cinema["showtimes"]:
+      continue
+    earliest_ts = None
+    for show in cinema["showtimes"]:
+      ts = showtime_timestamp(show.get("start_date"), show.get("start_time"))
+      if ts is not None and (earliest_ts is None or ts < earliest_ts):
+        earliest_ts = ts
+    cinema["_meta"] = {"earliest_ts": earliest_ts}
+    cinema_list.append(cinema)
+
+  film_genres_list = split_to_list(film.get("genre"))
+  film_languages_list = split_to_list(film.get("languages"))
+  film_languages_lower = [lang.lower() for lang in film_languages_list]
+  film_genres_lower = [genre.lower() for genre in film_genres_list]
+
+  if duration_max is not None and isinstance(film.get("duration"), int) and film["duration"] > duration_max:
+    cinema_list = []
+
+  if languages_filter_set and film_languages_lower and not languages_filter_set.intersection(film_languages_lower):
+    cinema_list = []
+
+  if genres_filter_set and film_genres_lower and not genres_filter_set.intersection(film_genres_lower):
+    cinema_list = []
+
+  if sort_by == "distance":
+    cinema_list.sort(key=lambda c: c.get("distance_km") if isinstance(c.get("distance_km"), (int, float)) else float("inf"))
+  elif sort_by == "earliest_showtime":
+    cinema_list.sort(key=lambda c: c.get("_meta", {}).get("earliest_ts") if c.get("_meta", {}).get("earliest_ts") is not None else float("inf"))
+
+  for cinema in cinema_list:
+    cinema.pop("_meta", None)
+
   return {
     "id": film["id"],
     "title": film["title"],
@@ -523,5 +788,9 @@ def movie_details(movie_id: int, req: MovieDetailsRequest = Body(...)):
     "release_date": film.get("release_date"),
     "synopsis": film.get("synopsis"),
     "director": film.get("director"),
-    "cinemas": list(cinemas.values()),
+    "genre": film.get("genre"),
+    "genres": film_genres_list,
+    "languages": film_languages_list,
+    "language": film_languages_list[0] if film_languages_list else None,
+    "cinemas": cinema_list,
   }

@@ -5,6 +5,14 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import Toast from "@/components/feedback/Toast.vue";
 import ControlsBar from "@/components/home/ControlsBar.vue";
 import ResultsList from "@/components/home/ResultsList.vue";
+import FilterBar from "@/components/filters/FilterBar.vue";
+import FilterItem from "@/components/filters/FilterItem.vue";
+import FilterDropdown from "@/components/filters/FilterDropdown.vue";
+import FilterCheckboxList from "@/components/filters/FilterCheckboxList.vue";
+import DatePickerNative from "@/components/filters/DatePickerNative.vue";
+import DurationSelector from "@/components/filters/DurationSelector.vue";
+import SortBySelector from "@/components/filters/SortBySelector.vue";
+import RadiusSelector from "@/components/controls/RadiusSelector.vue";
 
 const { position, error: geoError, getPosition } = useGeolocation();
 
@@ -29,6 +37,52 @@ const persistNumber = (key, value) => {
   window.localStorage.setItem(key, String(value));
 };
 
+const persistString = (key, value) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(key, value);
+};
+
+const removeStoredKey = (key) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.removeItem(key);
+};
+
+const readStoredString = (key) => {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return window.localStorage.getItem(key) || "";
+};
+
+const readStoredArray = (key) => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const persistArray = (key, arr) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!arr || arr.length === 0) {
+    removeStoredKey(key);
+    return;
+  }
+  window.localStorage.setItem(key, JSON.stringify(arr));
+};
+
 const readStoredRadius = () => {
   const storedRadius = readStoredNumber("radius_km");
   return Number.isNaN(storedRadius) || storedRadius <= 0 ? 5 : storedRadius;
@@ -48,7 +102,7 @@ const radiusKm = ref(defaultRadius);
 const currentPosition = ref(readStoredPosition());
 const radiusToast = ref("");
 let radiusToastTimeoutId;
-let radiusRefetchTimeoutId;
+let pendingFetchTimeoutId;
 
 const clearRadiusToast = () => {
   if (radiusToastTimeoutId) {
@@ -66,29 +120,22 @@ const showRadiusToast = (radius) => {
   }, 2000);
 };
 
-watch(radiusKm, (next, previous) => {
-  if (next === previous) {
-    return;
+const scheduleDataRefresh = () => {
+  if (pendingFetchTimeoutId) {
+    clearTimeout(pendingFetchTimeoutId);
   }
-  persistNumber("radius_km", next);
-  showRadiusToast(next);
-
-  // Debounce the refetch to avoid spamming the backend when the user scrolls the dropdown
-  if (radiusRefetchTimeoutId) {
-    clearTimeout(radiusRefetchTimeoutId);
-  }
-  radiusRefetchTimeoutId = setTimeout(async () => {
+  pendingFetchTimeoutId = setTimeout(async () => {
     try {
-      // Reuse the last request context if we have one (movie/cinema/city/geolocate)
       const opts = lastRequestOptions.value ? { ...lastRequestOptions.value } : {};
-      // Never force geolocation on radius change; keep current center unless explicitly requested later
-      if (opts.forceGeolocate) delete opts.forceGeolocate;
+      if (opts.forceGeolocate) {
+        delete opts.forceGeolocate;
+      }
       await fetchMovies(opts);
     } finally {
-      radiusRefetchTimeoutId = undefined;
+      pendingFetchTimeoutId = undefined;
     }
   }, 200);
-});
+};
 
 const formatCoordinate = (value) => {
   if (typeof value !== "number" || Number.isNaN(value)) {
@@ -110,10 +157,169 @@ const typeLabels = {
 };
 let suggestionsDebounceId;
 let suppressNextSuggestionFetch = false;
+const filterDate = ref(readStoredString("filters_date"));
+const filterGenres = ref(readStoredArray("filters_genres"));
+const filterLanguages = ref(readStoredArray("filters_languages"));
+const filterSubtitles = ref(readStoredArray("filters_subtitles").map((item) => String(item).toUpperCase()));
+const storedDurationMax = readStoredNumber("filters_duration_max_minutes");
+const filterDurationMax = ref(Number.isNaN(storedDurationMax) ? null : storedDurationMax);
+const filterSortBy = ref(readStoredString("filters_sort_by") || "relevance");
+const openDropdownKey = ref(null);
+const sortLabelMap = {
+  distance: "Distance",
+  earliest_showtime: "Première séance",
+  title_asc: "Titre A→Z",
+  duration_asc: "Durée croissante",
+};
+
+const toStringArray = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => item);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item);
+  }
+  return [];
+};
+
+const extractMovieGenres = (movie) => toStringArray(movie?.genres ?? movie?.genre);
+const extractMovieLanguages = (movie) => toStringArray(movie?.languages ?? movie?.language);
+
+watch(radiusKm, (next, previous) => {
+  if (next === previous) {
+    return;
+  }
+  persistNumber("radius_km", next);
+  showRadiusToast(next);
+  scheduleDataRefresh();
+});
+
+watch(filterDate, (value) => {
+  if (value) {
+    persistString("filters_date", value);
+  } else {
+    removeStoredKey("filters_date");
+  }
+  scheduleDataRefresh();
+});
+
+watch(filterGenres, (value) => {
+  persistArray("filters_genres", value);
+  scheduleDataRefresh();
+}, { deep: true });
+
+watch(filterLanguages, (value) => {
+  persistArray("filters_languages", value);
+  scheduleDataRefresh();
+}, { deep: true });
+
+watch(filterSubtitles, (value) => {
+  persistArray("filters_subtitles", value);
+  scheduleDataRefresh();
+}, { deep: true });
+
+watch(filterDurationMax, (value) => {
+  if (typeof value === "number") {
+    persistNumber("filters_duration_max_minutes", value);
+  } else {
+    removeStoredKey("filters_duration_max_minutes");
+  }
+  scheduleDataRefresh();
+});
+
+watch(filterSortBy, (value) => {
+  if (value && value !== "relevance") {
+    persistString("filters_sort_by", value);
+  } else {
+    removeStoredKey("filters_sort_by");
+  }
+  scheduleDataRefresh();
+});
 
 // --- Time helpers to hide past showtimes ---
 const now = ref(new Date());
 let nowTimerId;
+const availableGenres = computed(() => {
+  const set = new Set();
+  for (const movie of moviesNearby.value || []) {
+    for (const genre of extractMovieGenres(movie)) {
+      set.add(genre);
+    }
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+});
+
+const availableLanguages = computed(() => {
+  const set = new Set();
+  for (const movie of moviesNearby.value || []) {
+    for (const language of extractMovieLanguages(movie)) {
+      set.add(language);
+    }
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+});
+
+const availableSubtitles = computed(() => {
+  const set = new Set();
+  for (const movie of moviesNearby.value || []) {
+    for (const cinema of movie?.cinemas || []) {
+      for (const show of cinema?.showtimes || []) {
+        if (typeof show?.diffusion_version === "string" && show.diffusion_version.trim()) {
+          set.add(show.diffusion_version.trim().toUpperCase());
+        }
+      }
+    }
+  }
+  return Array.from(set).sort();
+});
+
+const genreItems = computed(() =>
+  availableGenres.value.map((genre) => ({
+    id: genre,
+    label: genre,
+    checked: filterGenres.value.includes(genre),
+  }))
+);
+
+const languageItems = computed(() =>
+  availableLanguages.value.map((language) => ({
+    id: language,
+    label: language,
+    checked: filterLanguages.value.includes(language),
+  }))
+);
+
+const subtitleLabels = {
+  ORIGINAL: "Original",
+  LOCAL: "Local",
+  DUBBED: "Doublé",
+};
+
+const subtitleItems = computed(() =>
+  availableSubtitles.value.map((code) => ({
+    id: code,
+    label: subtitleLabels[code] || code,
+    checked: filterSubtitles.value.includes(code),
+  }))
+);
+
+const selectedDateLabel = computed(() => (filterDate.value ? filterDate.value : ""));
+const selectedGenresLabel = computed(() => (filterGenres.value.length ? `${filterGenres.value.length}` : ""));
+const selectedLanguagesLabel = computed(() => (filterLanguages.value.length ? `${filterLanguages.value.length}` : ""));
+const selectedSubtitlesLabel = computed(() => (filterSubtitles.value.length ? `${filterSubtitles.value.length}` : ""));
+const selectedDurationLabel = computed(() => (typeof filterDurationMax.value === "number" ? `${filterDurationMax.value} min` : ""));
+const selectedSortLabel = computed(() => {
+  if (!filterSortBy.value || filterSortBy.value === "relevance") {
+    return "";
+  }
+  return sortLabelMap[filterSortBy.value] || filterSortBy.value;
+});
+const radiusLabel = computed(() => (radiusKm.value !== defaultRadius ? `${radiusKm.value} km` : ""));
 
 const parseShowStart = (show) => {
   try {
@@ -139,26 +345,128 @@ const parseShowStart = (show) => {
   }
 };
 
-// Compute list of movies with only future showtimes
+// Compute list of movies with only future showtimes and local filter fallbacks
 const upcomingMovies = computed(() => {
   const nowVal = now.value;
   if (!Array.isArray(moviesNearby.value)) return [];
 
-  return moviesNearby.value
-    .map((movie) => {
-      const cinemas = (movie.cinemas || [])
-        .map((cinema) => {
-          const showtimes = (cinema.showtimes || []).filter((s) => {
-            const dt = parseShowStart(s);
-            return dt && dt >= nowVal;
-          });
-          return { ...cinema, showtimes };
-        })
-        .filter((c) => (c.showtimes || []).length > 0); // keep cinemas that still have future showtimes
+  const activeDate = filterDate.value;
+  const activeGenres = filterGenres.value.map((g) => g.toLowerCase());
+  const hasGenreFilter = activeGenres.length > 0;
+  const activeLanguages = filterLanguages.value.map((l) => l.toLowerCase());
+  const hasLanguageFilter = activeLanguages.length > 0;
+  const activeSubtitles = new Set(filterSubtitles.value.map((s) => s.toUpperCase()));
+  const hasSubtitlesFilter = activeSubtitles.size > 0;
+  const durationMax = typeof filterDurationMax.value === "number" ? filterDurationMax.value : null;
+  const sortBy = filterSortBy.value || "relevance";
 
-      return { ...movie, cinemas };
-    })
-    .filter((m) => (m.cinemas || []).length > 0); // keep movies that still have at least one future showtime
+  const moviesWithMeta = moviesNearby.value.map((movie) => {
+    let minDistance = Number.POSITIVE_INFINITY;
+    let earliestTimestamp = Number.POSITIVE_INFINITY;
+
+    const cinemas = (movie.cinemas || [])
+      .map((cinema) => {
+        let showtimes = (cinema.showtimes || []).filter((s) => {
+          const dt = parseShowStart(s);
+          return dt && dt >= nowVal;
+        });
+
+        if (activeDate) {
+          showtimes = showtimes.filter((s) => s?.start_date === activeDate);
+        }
+        if (hasSubtitlesFilter) {
+          showtimes = showtimes.filter((s) => activeSubtitles.has(String(s?.diffusion_version || "").toUpperCase()));
+        }
+
+        if (!showtimes.length) {
+          return null;
+        }
+
+        const distance = typeof cinema.distance_km === "number" ? cinema.distance_km : null;
+        if (distance !== null && distance < minDistance) {
+          minDistance = distance;
+        }
+
+        for (const s of showtimes) {
+          const dt = parseShowStart(s);
+          if (dt) {
+            const ts = dt.getTime();
+            if (ts < earliestTimestamp) {
+              earliestTimestamp = ts;
+            }
+          }
+        }
+
+        return { ...cinema, showtimes };
+      })
+      .filter((c) => c && (c.showtimes || []).length > 0);
+
+    if (!cinemas.length) {
+      return null;
+    }
+
+    if (durationMax !== null) {
+      const duration = typeof movie?.duration === "number" ? movie.duration : null;
+      if (duration !== null && duration > durationMax) {
+        return null;
+      }
+    }
+
+    if (hasLanguageFilter) {
+      const movieLanguages = extractMovieLanguages(movie).map((lang) => lang.toLowerCase());
+      if (movieLanguages.length) {
+        const matchLanguage = activeLanguages.some((lang) => movieLanguages.includes(lang));
+        if (!matchLanguage) {
+          return null;
+        }
+      }
+    }
+
+    if (hasGenreFilter) {
+      const movieGenres = extractMovieGenres(movie).map((g) => g.toLowerCase());
+      if (movieGenres.length) {
+        const intersects = activeGenres.some((g) => movieGenres.includes(g));
+        if (!intersects) {
+          return null;
+        }
+      }
+    }
+
+    const movieCopy = { ...movie, cinemas };
+
+    return {
+      movie: movieCopy,
+      meta: {
+        minDistance,
+        earliestTimestamp,
+      },
+    };
+  }).filter((entry) => entry && Array.isArray(entry.movie?.cinemas) && entry.movie.cinemas.length > 0);
+
+  if (sortBy === "relevance") {
+    return moviesWithMeta.map((entry) => entry.movie);
+  }
+
+  const sorted = [...moviesWithMeta];
+  if (sortBy === "distance") {
+    sorted.sort((a, b) => (a.meta.minDistance || Infinity) - (b.meta.minDistance || Infinity));
+  } else if (sortBy === "earliest_showtime") {
+    sorted.sort((a, b) => (a.meta.earliestTimestamp || Infinity) - (b.meta.earliestTimestamp || Infinity));
+  } else if (sortBy === "title_asc") {
+    sorted.sort((a, b) => {
+      const titleA = String(a.movie?.title || "").toLowerCase();
+      const titleB = String(b.movie?.title || "").toLowerCase();
+      return titleA.localeCompare(titleB);
+    });
+  } else if (sortBy === "duration_asc") {
+    sorted.sort((a, b) => {
+      const durationA = typeof a.movie?.duration === "number" ? a.movie.duration : Number.POSITIVE_INFINITY;
+      const durationB = typeof b.movie?.duration === "number" ? b.movie.duration : Number.POSITIVE_INFINITY;
+      return durationA - durationB;
+    });
+  }
+
+  return sorted.map((entry) => entry.movie);
 });
 
 const resetSuggestions = () => {
@@ -360,6 +668,25 @@ const buildMoviesRequestBody = async (options = {}) => {
     body.cinema_id = options.cinemaId;
   }
 
+  if (filterDate.value) {
+    body.date = filterDate.value;
+  }
+  if (filterGenres.value.length) {
+    body.genres = [...filterGenres.value];
+  }
+  if (filterLanguages.value.length) {
+    body.languages = [...filterLanguages.value];
+  }
+  if (filterSubtitles.value.length) {
+    body.subtitles = [...filterSubtitles.value];
+  }
+  if (typeof filterDurationMax.value === "number") {
+    body.duration_max_minutes = filterDurationMax.value;
+  }
+  if (filterSortBy.value) {
+    body.sort_by = filterSortBy.value;
+  }
+
   return body;
 };
 
@@ -480,10 +807,59 @@ const handleSelectSuggestion = (suggestion) => {
 
 const handleFetchNearby = () => {
   fetchNearbyMovies();
+  openDropdownKey.value = null;
 };
 
 const handleRadiusUpdate = (value) => {
   radiusKm.value = value;
+  openDropdownKey.value = null;
+};
+
+const handleDateChange = (value) => {
+  filterDate.value = value;
+};
+
+const clearDateFilter = () => {
+  filterDate.value = "";
+  openDropdownKey.value = null;
+};
+
+const toggleValueInList = (listRef, value, checked) => {
+  const normalized = String(value);
+  const current = new Set(listRef.value);
+  if (checked) {
+    current.add(normalized);
+  } else {
+    current.delete(normalized);
+  }
+  listRef.value = Array.from(current);
+};
+
+const handleGenresToggle = ({ id, checked }) => {
+  toggleValueInList(filterGenres, id, checked);
+};
+
+const handleLanguagesToggle = ({ id, checked }) => {
+  toggleValueInList(filterLanguages, id, checked);
+};
+
+const handleSubtitlesToggle = ({ id, checked }) => {
+  const normalized = String(id).toUpperCase();
+  toggleValueInList(filterSubtitles, normalized, checked);
+};
+
+const handleDurationChange = (value) => {
+  filterDurationMax.value = value;
+};
+
+const clearDurationFilter = () => {
+  filterDurationMax.value = null;
+  openDropdownKey.value = null;
+};
+
+const handleSortByChange = (value) => {
+  filterSortBy.value = value;
+  openDropdownKey.value = null;
 };
 
 const onSearchKeydown = (event) => {
@@ -544,9 +920,9 @@ onBeforeUnmount(() => {
     clearInterval(nowTimerId);
     nowTimerId = undefined;
   }
-  if (radiusRefetchTimeoutId) {
-    clearTimeout(radiusRefetchTimeoutId);
-    radiusRefetchTimeoutId = undefined;
+  if (pendingFetchTimeoutId) {
+    clearTimeout(pendingFetchTimeoutId);
+    pendingFetchTimeoutId = undefined;
   }
 });
 </script>
@@ -574,6 +950,157 @@ onBeforeUnmount(() => {
     />
 
     <Toast :message="radiusToast" />
+
+    <FilterBar
+      :openDropdownKey="openDropdownKey"
+      @update:openDropdownKey="openDropdownKey = $event"
+    >
+      <template #date>
+        <div class="filter-entry">
+          <FilterItem
+            label="Date"
+            dropdownKey="date"
+            :active="!!filterDate"
+          >
+            <template #value>
+              <span v-if="selectedDateLabel" class="filter-item__value">{{ selectedDateLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="date">
+            <DatePickerNative
+              :modelValue="filterDate"
+              @update:modelValue="handleDateChange"
+            />
+            <button type="button" @click="clearDateFilter">Effacer</button>
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #genres>
+        <div class="filter-entry">
+          <FilterItem
+            label="Genres"
+            dropdownKey="genres"
+            :active="filterGenres.length > 0"
+          >
+            <template #value>
+              <span v-if="selectedGenresLabel" class="filter-item__value">{{ selectedGenresLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="genres">
+            <FilterCheckboxList
+              groupLabel="Genres"
+              :items="genreItems"
+              @toggle="handleGenresToggle"
+            />
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #languages>
+        <div class="filter-entry">
+          <FilterItem
+            label="Langues"
+            dropdownKey="languages"
+            :active="filterLanguages.length > 0"
+          >
+            <template #value>
+              <span v-if="selectedLanguagesLabel" class="filter-item__value">{{ selectedLanguagesLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="languages">
+            <FilterCheckboxList
+              groupLabel="Langues"
+              :items="languageItems"
+              @toggle="handleLanguagesToggle"
+            />
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #subtitles>
+        <div class="filter-entry">
+          <FilterItem
+            label="Sous-titres"
+            dropdownKey="subtitles"
+            :active="filterSubtitles.length > 0"
+          >
+            <template #value>
+              <span v-if="selectedSubtitlesLabel" class="filter-item__value">{{ selectedSubtitlesLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="subtitles">
+            <FilterCheckboxList
+              groupLabel="Sous-titres"
+              :items="subtitleItems"
+              @toggle="handleSubtitlesToggle"
+            />
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #duration>
+        <div class="filter-entry">
+          <FilterItem
+            label="Durée"
+            dropdownKey="duration"
+            :active="filterDurationMax !== null"
+          >
+            <template #value>
+              <span v-if="selectedDurationLabel" class="filter-item__value">{{ selectedDurationLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="duration">
+            <DurationSelector
+              :modelValue="filterDurationMax"
+              @update:modelValue="handleDurationChange"
+            />
+            <button type="button" @click="clearDurationFilter">Réinitialiser</button>
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #radius>
+        <div class="filter-entry">
+          <FilterItem
+            label="Périmètre"
+            dropdownKey="radius"
+            :active="radiusKm !== defaultRadius"
+          >
+            <template #value>
+              <span v-if="radiusLabel" class="filter-item__value">{{ radiusLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="radius">
+            <RadiusSelector
+              :modelValue="radiusKm"
+              label="Rayon de recherche"
+              @update:modelValue="handleRadiusUpdate"
+            />
+          </FilterDropdown>
+        </div>
+      </template>
+
+      <template #sort>
+        <div class="filter-entry">
+          <FilterItem
+            label="Trier"
+            dropdownKey="sort"
+            :active="filterSortBy !== 'relevance'"
+          >
+            <template #value>
+              <span v-if="selectedSortLabel" class="filter-item__value">{{ selectedSortLabel }}</span>
+            </template>
+          </FilterItem>
+          <FilterDropdown dropdownKey="sort">
+            <SortBySelector
+              :modelValue="filterSortBy"
+              @update:modelValue="handleSortByChange"
+            />
+          </FilterDropdown>
+        </div>
+      </template>
+    </FilterBar>
 
     <ResultsList v-if="upcomingMovies.length" :movies="upcomingMovies" />
     <EmptyState
