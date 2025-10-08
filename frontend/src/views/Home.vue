@@ -1,6 +1,10 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch, computed } from "vue";
 import { useGeolocation } from "@/composables/geoloc.js";
+import EmptyState from "@/components/common/EmptyState.vue";
+import Toast from "@/components/feedback/Toast.vue";
+import ControlsBar from "@/components/home/ControlsBar.vue";
+import ResultsList from "@/components/home/ResultsList.vue";
 
 const { position, error: geoError, getPosition } = useGeolocation();
 
@@ -97,7 +101,7 @@ const suggestions = ref([]);
 const searchQuery = ref("");
 const isSuggestionsOpen = ref(false);
 const highlightIndex = ref(-1);
-const searchContainer = ref(null);
+const controlsBarRef = ref(null);
 const activeFilter = ref({ mode: "all", label: "" });
 const typeLabels = {
   film: "FILM",
@@ -265,10 +269,12 @@ watch(
 );
 
 const handleClickOutside = (event) => {
-  if (!searchContainer.value) {
+  const searchBoxComponent = controlsBarRef.value?.searchBox ?? null;
+  const containerEl = searchBoxComponent?.container?.value ?? null;
+  if (!containerEl) {
     return;
   }
-  if (!searchContainer.value.contains(event.target)) {
+  if (!containerEl.contains(event.target)) {
     closeSuggestions();
   }
 };
@@ -456,6 +462,30 @@ const selectSuggestion = async (suggestion) => {
   }
 };
 
+const handleSearchInput = (value) => {
+  searchQuery.value = value;
+};
+
+const handleOpenSuggestions = () => {
+  openSuggestions();
+};
+
+const handleSearchKeydown = (event) => {
+  onSearchKeydown(event);
+};
+
+const handleSelectSuggestion = (suggestion) => {
+  selectSuggestion(suggestion);
+};
+
+const handleFetchNearby = () => {
+  fetchNearbyMovies();
+};
+
+const handleRadiusUpdate = (value) => {
+  radiusKm.value = value;
+};
+
 const onSearchKeydown = (event) => {
   if (!isSuggestionsOpen.value || !suggestions.value.length) {
     if (event.key === "Enter") {
@@ -524,101 +554,31 @@ onBeforeUnmount(() => {
 <template>
   <div class="home">
     <h1 class="text-3xl font-bold text-blue-600">Flim</h1>
-    <div class="controls">
-      <button
-        v-if="activeFilter.mode !== 'all'"
-        @click="resetToAll"
-        :disabled="loading"
-        title="Revenir à la vue initiale (tous les films et cinémas autour de moi)"
-      >
-        ← Retour
-      </button>
-      <div class="search" ref="searchContainer">
-        <input
-          type="search"
-          v-model="searchQuery"
-          placeholder="Rechercher un film, un cinéma ou une ville"
-          @focus="openSuggestions"
-          @keydown="onSearchKeydown"
-          role="combobox"
-          aria-autocomplete="list"
-          :aria-expanded="isSuggestionsOpen ? 'true' : 'false'"
-          aria-haspopup="listbox"
-          aria-controls="suggestions-list"
-          :aria-activedescendant="isSuggestionsOpen && highlightIndex >= 0 && suggestions[highlightIndex] ? `sugg-${suggestions[highlightIndex].type}-${suggestions[highlightIndex].id}` : undefined"
-        />
-        <ul
-          v-if="isSuggestionsOpen && suggestions.length"
-          class="suggestions"
-          id="suggestions-list"
-          role="listbox"
-        >
-          <li
-            v-for="(item, index) in suggestions"
-            :key="`${item.type}-${item.id}`"
-            :id="`sugg-${item.type}-${item.id}`"
-            role="option"
-            :aria-selected="index === highlightIndex ? 'true' : 'false'"
-            :class="{ highlighted: index === highlightIndex }"
-            @mousedown.prevent="selectSuggestion(item)"
-          >
-            <span class="suggestion__tag">{{ typeLabels[item.type] ?? item.type }}</span>
-            <span class="suggestion__label">{{ item.label }}</span>
-            <span v-if="item.sublabel" class="suggestion__sublabel">{{ item.sublabel }}</span>
-          </li>
-        </ul>
-      </div>
+    <ControlsBar
+      ref="controlsBarRef"
+      :loading="loading"
+      :radiusKm="radiusKm"
+      :typeLabels="typeLabels"
+      :searchQuery="searchQuery"
+      :suggestions="suggestions"
+      :isSuggestionsOpen="isSuggestionsOpen"
+      :highlightIndex="highlightIndex"
+      :backVisible="activeFilter.mode !== 'all'"
+      @reset="resetToAll"
+      @search-input="handleSearchInput"
+      @open-suggestions="handleOpenSuggestions"
+      @keydown="handleSearchKeydown"
+      @select-suggestion="handleSelectSuggestion"
+      @fetch-nearby="handleFetchNearby"
+      @update:radiusKm="handleRadiusUpdate"
+    />
 
-      <button @click="fetchNearbyMovies" :disabled="loading">
-        {{ loading ? "Chargement..." : "Autour de moi" }}
-      </button>
+    <Toast :message="radiusToast" />
 
-      <label class="radius">
-        Rayon de recherche
-        <select v-model.number="radiusKm">
-          <option :value="2">2 km</option>
-          <option :value="5">5 km</option>
-          <option :value="10">10 km</option>
-          <option :value="15">15 km</option>
-          <option :value="20">20 km</option>
-          <option :value="30">30 km</option>
-        </select>
-      </label>
-    </div>
-
-    <div v-if="upcomingMovies.length" id="results">
-      <div v-for="movie in upcomingMovies" :key="movie.id ?? movie.title" class="movie">
-        <h2>{{ movie.title }}</h2>
-        <img v-if="movie.poster" :src="movie.poster" :alt="movie.title" width="100" />
-
-        <div>
-          <router-link v-if="movie.id" :to="{ name: 'Movie', params: { id: movie.id } }">
-            <button>Voir toutes les séances</button>
-          </router-link>
-          <button v-else disabled title="Identifiant film indisponible">Voir toutes les séances</button>
-        </div>
-
-        <div class="cinemas">
-          <div class="cinema" v-for="cinema in movie.cinemas" :key="cinema.id">
-            <strong>{{ cinema.name }}</strong>
-            <span>
-              ({{ typeof cinema.distance_km === "number" ? cinema.distance_km.toFixed(2) : "?" }} km)
-            </span>
-            <p v-if="cinema.address">{{ cinema.address }}</p>
-
-            <div class="showtimes">
-              <div class="showtime" v-for="(show, index) in cinema.showtimes" :key="index">
-                {{ show.start_date }} {{ show.start_time }}
-                <span v-if="show.diffusion_version"> ({{ show.diffusion_version }})</span>
-                <span v-if="show.format"> • {{ show.format }}</span>
-                <a v-if="show.reservation_url" :href="show.reservation_url" target="_blank">Réserver</a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <p v-else-if="!loading">Aucun film avec séance à venir dans le périmètre.</p>
+    <ResultsList v-if="upcomingMovies.length" :movies="upcomingMovies" />
+    <EmptyState
+      v-else-if="!loading"
+      description="Aucun film avec séance à venir dans le périmètre."
+    />
   </div>
 </template>

@@ -2,6 +2,10 @@
 import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useGeolocation } from "@/composables/geoloc.js";
+import GeoButton from "@/components/controls/GeoButton.vue";
+import RadiusSelector from "@/components/controls/RadiusSelector.vue";
+import MovieHeader from "@/components/movie/MovieHeader.vue";
+import CinemaBlock from "@/components/movie/CinemaBlock.vue";
 
 const route = useRoute();
 const movieId = Number(route.params.id);
@@ -47,8 +51,8 @@ const persistPosition = (lat, lon) => {
 
 // ---------- Radius UI ----------
 const radiusKm = ref(readStoredRadius());
-const radiusOptions = [2, 5, 10, 15, 20, 30];
-const onRadiusChange = async () => {
+const handleRadiusUpdate = async (value) => {
+  radiusKm.value = value;
   persistNumber("radius_km", radiusKm.value);
   await loadMovie(); // refetch with new radius
 };
@@ -136,14 +140,12 @@ onMounted(async () => {
 
     <!-- Controls -->
     <div class="controls">
-      <label>
-        Périmètre :
-        <select v-model.number="radiusKm" @change="onRadiusChange">
-          <option v-for="r in radiusOptions" :key="r" :value="r">{{ r }} km</option>
-        </select>
-      </label>
-
-      <button @click="refreshAroundMe">Autour de moi</button>
+      <RadiusSelector
+        :modelValue="radiusKm"
+        label="Périmètre :"
+        @update:modelValue="handleRadiusUpdate"
+      />
+      <GeoButton :loading="loading" @click="refreshAroundMe" />
     </div>
 
     <!-- Loading -->
@@ -151,33 +153,17 @@ onMounted(async () => {
 
     <!-- Content -->
     <div v-else-if="movie" class="movie">
-      <h1>{{ movie.title }}</h1>
-      <img v-if="movie.poster_url" :src="movie.poster_url" :alt="movie.title" class="poster" />
-      <p><strong>Durée :</strong> {{ movie.duration ?? "?" }} min</p>
-      <p><strong>Réalisateur :</strong> {{ movie.director ?? "—" }}</p>
-      <p><strong>Synopsis :</strong> {{ movie.synopsis ?? "—" }}</p>
+      <MovieHeader
+        :title="movie.title"
+        :poster-url="movie.poster_url"
+        :duration="movie.duration"
+        :director="movie.director"
+        :synopsis="movie.synopsis"
+      />
 
       <h2>Séances</h2>
-      <div v-for="(cinema, cIdx) in (movie.cinemas || [])" :key="cinema.id ?? cIdx" class="cinema">
-        <h3>
-          {{ cinema.name }}
-          <span v-if="typeof cinema.distance_km === 'number'">
-            ({{ cinema.distance_km.toFixed(1) }} km)
-          </span>
-        </h3>
-        <p v-if="cinema.address">{{ cinema.address }}</p>
-
-        <ul class="showtimes">
-          <li
-            v-for="(show, sIdx) in (cinema.showtimes || [])"
-            :key="`${cinema.id ?? cIdx}-${show.start_date ?? ''}-${show.start_time ?? ''}-${sIdx}`"
-          >
-            {{ show.start_date }} {{ show.start_time }}
-            <span v-if="show.diffusion_version"> ({{ show.diffusion_version }})</span>
-            <span v-if="show.format"> • {{ show.format }}</span>
-            <a v-if="show.reservation_url" :href="show.reservation_url" target="_blank" rel="noopener noreferrer">Réserver</a>
-          </li>
-        </ul>
+      <div v-for="(cinema, cIdx) in (movie.cinemas || [])" :key="cinema.id ?? cIdx" class="cinema-wrapper">
+        <CinemaBlock :cinema="cinema" :distance-precision="1" />
       </div>
     </div>
   </div>
@@ -205,15 +191,15 @@ button {
 .loading {
   opacity: 0.8;
 }
-.poster {
+:deep(.poster) {
   max-width: 220px;
   display: block;
   margin-bottom: 12px;
 }
-.cinema {
+:deep(.cinema) {
   margin: 12px 0 20px;
 }
-.showtimes {
+:deep(.showtimes) {
   margin: 8px 0 0 0;
   padding-left: 18px;
 }
