@@ -9,6 +9,7 @@ import os
 import time
 import random
 import logging
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -44,7 +45,6 @@ def clean_html(text):
         return cleaned
     except Exception:
         # fallback basique
-        import re
         return re.sub(r"<[^>]+>", "", text).strip()
 
 def safe_get(d, keys):
@@ -76,17 +76,73 @@ def parse_date_maybe(s):
     except Exception:
         return None
 
+def clean_entry(s):
+    """Nettoie une chaîne de caractères (strip, lower, remove accents)."""
+    if not s:
+        return None
+    import unicodedata
+    s = s.strip().lower()
+    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    return s
+
+def get_or_create_genre(conn, genre_name):
+    """Retourne l'id du genre, l'insère si nécessaire."""
+    if not genre_name:
+        return None
+    genre_name_clean = genre_name.strip()
+    if not genre_name_clean:
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM genre WHERE name = %s", (genre_name_clean,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("INSERT INTO genre (name) VALUES (%s) RETURNING id", (genre_name_clean,))
+        genre_id = cur.fetchone()[0]
+        conn.commit()
+        return genre_id
+    except Exception as e:
+        logger.exception("Erreur get_or_create_genre pour '%s': %s", genre_name_clean, e)
+        conn.rollback()
+        return None
+    finally:
+        cur.close()
+
+def get_or_create_language(conn, language_name):
+    """Retourne l'id de la langue, l'insère si nécessaire."""
+    if not language_name:
+        return None
+    language_name_clean = language_name.strip()
+    if not language_name_clean:
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM language WHERE name = %s", (language_name_clean,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("INSERT INTO language (name) VALUES (%s) RETURNING id", (language_name_clean,))
+        language_id = cur.fetchone()[0]
+        conn.commit()
+        return language_id
+    except Exception as e:
+        logger.exception("Erreur get_or_create_language pour '%s': %s", language_name_clean, e)
+        conn.rollback()
+        return None
+    finally:
+        cur.close()
+
 # --- DB helpers
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 def ensure_movie_columns(conn):
-    """Ajoute les colonnes manquantes si nécessaire (languages, is_premiere, director, original_title)."""
+    """Ajoute les colonnes manquantes si nécessaire (is_premiere, director, original_title)."""
     cur = conn.cursor()
     cur.execute("""
     ALTER TABLE films
-    ADD COLUMN IF NOT EXISTS languages TEXT,
     ADD COLUMN IF NOT EXISTS is_premiere BOOLEAN DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS director TEXT,
     ADD COLUMN IF NOT EXISTS original_title TEXT;
@@ -97,22 +153,22 @@ def ensure_movie_columns(conn):
 def upsert_movie(conn, movie):
     """
     movie: dict avec clefs:
-      id_allocine, title, original_title, release_date (date or None), genre, duration, synopsis, poster_url, languages, is_premiere, director
+      id_allocine, title, original_title, release_date (date or None), genre_id, duration, synopsis, poster_url, language_id, is_premiere, director
     """
     cur = conn.cursor()
     query = """
     INSERT INTO films
-      (id_allocine, title, original_title, release_date, genre, duration, synopsis, poster_url, languages, is_premiere, director, last_update)
+      (id_allocine, title, original_title, release_date, genre_id, duration, synopsis, poster_url, language_id, is_premiere, director, last_update)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT (id_allocine) DO UPDATE
     SET title = EXCLUDED.title,
         original_title = COALESCE(EXCLUDED.original_title, films.original_title),
         release_date = COALESCE(EXCLUDED.release_date, films.release_date),
-        genre = COALESCE(EXCLUDED.genre, films.genre),
+        genre_id = COALESCE(EXCLUDED.genre_id, films.genre_id),
         duration = COALESCE(EXCLUDED.duration, films.duration),
         synopsis = COALESCE(EXCLUDED.synopsis, films.synopsis),
         poster_url = COALESCE(EXCLUDED.poster_url, films.poster_url),
-        languages = COALESCE(EXCLUDED.languages, films.languages),
+        language_id = COALESCE(EXCLUDED.language_id, films.language_id),
         is_premiere = EXCLUDED.is_premiere,
         director = COALESCE(EXCLUDED.director, films.director),
         last_update = NOW();
@@ -122,11 +178,11 @@ def upsert_movie(conn, movie):
         movie.get("title"),
         movie.get("original_title"),
         movie.get("release_date"),
-        movie.get("genre"),
+        movie.get("genre_id"),
         movie.get("duration"),
         movie.get("synopsis"),
         movie.get("poster_url"),
-        movie.get("languages"),
+        movie.get("language_id"),
         movie.get("is_premiere"),
         movie.get("director")
     ))
@@ -153,8 +209,10 @@ def build_movie_dict_from_allocine(raw):
     original_title = safe_get(raw, ["originalTitle", "original_title", "originalTitleFR", "titleOriginal"])
     # genre: peut être chaine ou liste
     genre = safe_get(raw, ["genre", "genres", "category"])
-    if isinstance(genre, list):
-        genre = ", ".join([str(g) for g in genre])
+    if isinstance(genre, str):
+        genre = [genre]
+    elif not isinstance(genre, list):
+        genre = []
     # duration: runtime, duration, length
     duration_raw = safe_get(raw, ["runtime", "duration", "length"])
     duration = None
@@ -162,7 +220,6 @@ def build_movie_dict_from_allocine(raw):
         duration = duration_raw
     elif isinstance(duration_raw, str):
         # parse duration string like "1h 55min" or "115 min"
-        import re
         h_match = re.search(r"(\d+)\s*h", duration_raw)
         m_match = re.search(r"(\d+)\s*min", duration_raw)
         if h_match or m_match:
@@ -198,8 +255,10 @@ def build_movie_dict_from_allocine(raw):
 
     # languages, director, is_premiere
     languages = safe_get(raw, ["languages", "language", "originalLanguage"])
-    if isinstance(languages, list):
-      lolanguages = ", ".join([str(l) for l in languages if l])
+    if isinstance(languages, str):
+        languages = [languages]
+    elif not isinstance(languages, list):
+        languages = []
 
     director = None
     # certains wrappers renvoient 'casting' ou 'directors'
@@ -317,7 +376,6 @@ def main():
 
                     for raw_movie in movies:
                         movie_dict = build_movie_dict_from_allocine(raw_movie)
-                        # print("RAW MOVIE:", raw_movie)
 
                         if not movie_dict:
                             logger.info(" -> film sans id, skip: %s", raw_movie)
@@ -328,8 +386,89 @@ def main():
                             # déjà inséré (ou mis à jour) par un autre cinéma ou jour
                             continue
 
+                        # Nettoyer et normaliser genres et langues
+                        genres = movie_dict.get("genre", [])
+                        if isinstance(genres, str):
+                            genres = [genres]
+                        genres_clean = []
+                        for g in genres:
+                            if not g:
+                                continue
+                            if isinstance(g, str):
+                                genres_clean.append(g.strip())
+                            else:
+                                genres_clean.append(str(g).strip())
+                        genres_clean = [g for g in genres_clean if g]
+
+                        languages = movie_dict.get("languages", [])
+                        if isinstance(languages, str):
+                            languages = [languages]
+                        languages_clean = []
+                        for l in languages:
+                            if not l:
+                                continue
+                            if isinstance(l, str):
+                                languages_clean.append(l.strip())
+                            else:
+                                languages_clean.append(str(l).strip())
+                        languages_clean = [l for l in languages_clean if l]
+
+                        # Insérer genres et récupérer genre_id principal
+                        genre_id = None
+                        try:
+                            if genres_clean:
+                                genre_id = get_or_create_genre(conn, genres_clean[0])
+                            else:
+                                genre_id = None
+                        except Exception as e:
+                            logger.exception("Erreur lors de la récupération du genre principal pour film %s: %s", movie_key, e)
+                            genre_id = None
+
+                        # Insérer langues et récupérer language_id principal
+                        language_id = None
+                        try:
+                            if languages_clean:
+                                language_id = get_or_create_language(conn, languages_clean[0])
+                            else:
+                                language_id = None
+                        except Exception as e:
+                            logger.exception("Erreur lors de la récupération de la langue principale pour film %s: %s", movie_key, e)
+                            language_id = None
+
+                        movie_dict["genre_id"] = genre_id
+                        movie_dict["language_id"] = language_id
+
                         try:
                             upsert_movie(conn, movie_dict)
+                            # Insérer toutes les relations film_genre
+                            if genres_clean:
+                                cur = conn.cursor()
+                                try:
+                                    for g in genres_clean:
+                                        g_id = get_or_create_genre(conn, g)
+                                        if g_id:
+                                            cur.execute("INSERT INTO film_genre (film_id, genre_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (movie_key, g_id))
+                                    conn.commit()
+                                except Exception as e:
+                                    logger.exception("Erreur insertion film_genre pour film %s: %s", movie_key, e)
+                                    conn.rollback()
+                                finally:
+                                    cur.close()
+                            # Insérer toutes les relations film_language
+                            if languages_clean:
+                                cur = conn.cursor()
+                                try:
+                                    for l in languages_clean:
+                                        l_id = get_or_create_language(conn, l)
+                                        if l_id:
+                                            cur.execute("INSERT INTO film_language (film_id, language_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (movie_key, l_id))
+                                    conn.commit()
+                                except Exception as e:
+                                    logger.exception("Erreur insertion film_language pour film %s: %s", movie_key, e)
+                                    conn.rollback()
+                                finally:
+                                    cur.close()
+
                             seen.add(movie_key)
                             inserted += 1
                             logger.info("✅ + film inséré/maj: %s (%s)", movie_dict.get("title"), movie_key)
