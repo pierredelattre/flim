@@ -279,17 +279,16 @@ def filters_options():
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
       cur.execute(
         """
-        SELECT languages
-        FROM films
-        WHERE languages IS NOT NULL
-          AND TRIM(languages) <> ''
+        SELECT DISTINCT l.name AS language
+        FROM film_language fl
+        JOIN language l ON fl.language_id = l.id
         """
       )
       rows = cur.fetchall()
       for row in rows:
-        for entry in split_to_list(row.get("languages")):
-          if entry:
-            languages.add(entry)
+        entry = row.get("language")
+        if entry:
+          languages.add(entry)
   except Exception as exc:
     logging.error("Error while retrieving filter options: %s", exc)
   finally:
@@ -539,8 +538,8 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
       m.duration,
       m.release_date,
       m.synopsis,
-      m.genre,
-      m.languages,
+      ARRAY_REMOVE(ARRAY_AGG(DISTINCT g.name), NULL) AS genres,
+      ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.name), NULL) AS languages,
       c.id AS cinema_id,
       c.name AS cinema_name,
       c.address,
@@ -555,7 +554,12 @@ def movies_nearby(req: MoviesNearbyRequest = Body(...)):
     FROM showtimes s
     JOIN cinemas c ON c.id = s.cinema_id
     JOIN films m ON m.id = s.movie_id
+    LEFT JOIN film_genre fg ON fg.film_id = m.id_allocine
+    LEFT JOIN genre g ON g.id = fg.genre_id
+    LEFT JOIN film_language fl ON fl.film_id = m.id_allocine
+    LEFT JOIN language l ON l.id = fl.language_id
     WHERE {' AND '.join(where_clauses)}
+    GROUP BY m.id, c.id, s.start_date, s.start_time, s.diffusion_version, s.format, s.reservation_url
     ORDER BY m.title ASC, c.name ASC, s.start_date ASC, s.start_time ASC;
   """
 
